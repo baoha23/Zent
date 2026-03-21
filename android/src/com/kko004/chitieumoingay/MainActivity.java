@@ -79,16 +79,38 @@ public class MainActivity extends Activity {
         }
         String scheme = uri.getScheme() != null ? uri.getScheme().toLowerCase() : "";
         String url = uri.toString();
-        if ("http".equals(scheme) || "https".equals(scheme) || "file".equals(scheme)) {
+        if ("file".equals(scheme)) {
           view.loadUrl(url);
           return true;
         }
+        if ("http".equals(scheme) || "https".equals(scheme)) {
+          if (shouldOpenExternally(uri)) {
+            return openExternalUri(uri);
+          }
+          view.loadUrl(url);
+          return true;
+        }
+        return openExternalUri(uri);
+      }
+
+      private boolean shouldOpenExternally(Uri uri) {
+        String host = uri.getHost() != null ? uri.getHost().toLowerCase() : "";
+        String path = uri.getPath() != null ? uri.getPath().toLowerCase() : "";
+        String url = uri.toString().toLowerCase();
+        return path.endsWith(".apk") ||
+          url.contains("export=download") ||
+          "drive.google.com".equals(host) ||
+          "docs.google.com".equals(host);
+      }
+
+      private boolean openExternalUri(Uri uri) {
         try {
           startActivity(new Intent(Intent.ACTION_VIEW, uri));
+          return true;
         } catch (Exception error) {
-          Log.w(WEBVIEW_TAG, "Cannot open external uri=" + url + " error=" + error.getMessage());
+          Log.w(WEBVIEW_TAG, "Cannot open external uri=" + uri + " error=" + error.getMessage());
+          return false;
         }
-        return true;
       }
 
       @Override

@@ -751,13 +751,29 @@ function showVersionUpdateLinkDialog(href) {
   return false;
 }
 
+function openVersionUpdateLink(href) {
+  const link = String(href || "").trim();
+  if (!isLikelyHttpUrl(link)) return false;
+  if (typeof window === "undefined") return false;
+  if (window.location && typeof window.location.assign === "function") {
+    window.location.assign(link);
+    return true;
+  }
+  if (window.location) {
+    window.location.href = link;
+    return true;
+  }
+  return false;
+}
+
 function onVersionUpdateLinkClick(event) {
   const linkElement = event?.currentTarget;
   const href = String(linkElement?.getAttribute?.("href") || linkElement?.href || "").trim();
   if (!isLikelyHttpUrl(href)) return;
   if (event && typeof event.preventDefault === "function") event.preventDefault();
+  if (openVersionUpdateLink(href)) return;
   if (showVersionUpdateLinkDialog(href)) return;
-  setFormStatus("Không hiển thị được popup link cập nhật.", "error");
+  setFormStatus("Không mở được link cập nhật.", "error");
 }
 
 function applyTheme() {

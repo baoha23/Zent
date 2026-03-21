@@ -1,4 +1,4 @@
-# App quản lý chi tiêu hàng ngày + Google Sheet
+# Zent + Google Sheet
 
 ## 1) Chức năng hiện có
 

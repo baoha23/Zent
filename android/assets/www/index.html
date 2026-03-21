@@ -1,0 +1,339 @@
+﻿<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Chi Tiêu Mỗi Ngày</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/png" sizes="16x16" href="assets/icons/favicon-16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="assets/icons/favicon-48.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img class="app-avatar" src="assets/icons/app-avatar.png" alt="Avatar ứng dụng" width="52" height="52" />
+          <div>
+            <p class="eyebrow">Expense Tracker</p>
+            <h1>Chi tiêu mỗi ngày</h1>
+            <p class="subtitle">Gọn, rõ, đủ dùng cho người cơ bản.</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="offline-indicator" class="offline-badge" style="display: none;">Offline</span>
+          <a
+            id="version-update-link"
+            class="update-link-btn version-update-link"
+            href="https://drive.google.com/drive/u/0/folders/1AVPqd_9r7M5qyuT77p2OSZuZSVhrThV1"
+            >Cập nhật phiên bản</a
+          >
+          <button id="toggle-amount-visibility" class="ghost-btn" type="button">Ẩn số tiền</button>
+          <button id="toggle-theme" class="ghost-btn" type="button">Chế độ tối</button>
+          <button id="toggle-settings" class="ghost-btn" type="button" aria-expanded="false" aria-pressed="false">Cài đặt</button>
+        </div>
+      </header>
+
+      <section class="stats-grid" aria-label="Thống kê chi tiêu">
+        <article class="stat-card">
+          <p>Hôm nay</p>
+          <h2 id="stat-today">0 đ</h2>
+        </article>
+        <article class="stat-card">
+          <p>Tháng này</p>
+          <h2 id="stat-month">0 đ</h2>
+        </article>
+        <article class="stat-card">
+          <p>Số giao dịch</p>
+          <h2 id="stat-count">0</h2>
+        </article>
+        <article class="stat-card">
+          <p>Ngân sách tháng</p>
+          <h2 id="stat-budget">Chưa đặt</h2>
+        </article>
+      </section>
+      <p id="budget-warning" class="budget-warning hidden" role="status" aria-live="polite"></p>
+
+      <section class="panel" aria-label="Tổng kết danh mục theo tháng">
+        <div class="panel-heading">
+          <div>
+            <h3>Tổng kết danh mục theo tháng</h3>
+            <p id="monthly-summary-total" class="hint">Chưa có dữ liệu.</p>
+          </div>
+          <div class="summary-month-picker">
+            <label for="monthly-summary-month" class="hint">Tháng</label>
+            <input id="monthly-summary-month" type="month" />
+          </div>
+        </div>
+        <div id="monthly-summary-list" class="monthly-summary-list"></div>
+        <p id="monthly-summary-empty" class="empty-state">Chưa có giao dịch cho tháng đã chọn.</p>
+      </section>
+
+      <button id="settings-backdrop" class="settings-backdrop hidden" type="button" aria-label="Đóng cài đặt"></button>
+      <section id="settings-panel" class="panel hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="settings-popup-head">
+          <h3 id="settings-title">Cài đặt</h3>
+          <button id="close-settings" type="button" class="ghost-btn tiny">Đóng</button>
+        </div>
+        <div class="form-grid">
+          <div class="field-grid">
+            <label for="monthly-budget">Ngân sách tháng (VND)</label>
+            <input
+              id="monthly-budget"
+              type="text"
+              inputmode="numeric"
+              placeholder="Ví dụ: 5.000.000"
+              autocomplete="off"
+            />
+          </div>
+          <div class="field-grid span-2">
+            <label for="sheet-endpoint">Web App URL (Google Apps Script, tuỳ chọn)</label>
+            <input
+              id="sheet-endpoint"
+              type="url"
+              placeholder="https://script.google.com/macros/s/.../exec"
+              autocomplete="off"
+            />
+          </div>
+          <div class="field-grid span-2">
+            <label for="sheet-api-key">API Key (tuỳ chọn)</label>
+            <input id="sheet-api-key" type="password" placeholder="abc123..." autocomplete="off" />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button id="save-settings" type="button" class="primary-btn">Lưu cài đặt</button>
+          <button id="sync-pending" type="button" class="ghost-btn">Đồng bộ bản ghi chưa gửi</button>
+          <button id="toggle-daily-reminder" type="button" class="ghost-btn" aria-pressed="false">Bật nhắc 21:00</button>
+        </div>
+        <div class="settings-row">
+          <button id="toggle-auto-sync" type="button" class="ghost-btn" aria-pressed="false">Tự động đồng bộ: Tắt</button>
+          <select id="auto-sync-interval" class="interval-select">
+            <option value="5">5 phút</option>
+            <option value="15" selected>15 phút</option>
+            <option value="30">30 phút</option>
+            <option value="60">1 giờ</option>
+            <option value="120">2 giờ</option>
+          </select>
+        </div>
+        <p class="hint">
+          Chỉ cần nhập URL khi bạn muốn đồng bộ lên Google Sheet. Link cập nhật:
+          <a
+            class="inline-link version-update-link"
+            href="https://drive.google.com/drive/u/0/folders/1AVPqd_9r7M5qyuT77p2OSZuZSVhrThV1"
+            >Mở thư mục bản mới</a
+          > (bấm nút Back của điện thoại để quay lại app).
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h3>Thêm chi tiêu</h3>
+        </div>
+        <form id="expense-form" class="form-grid">
+          <div class="field-grid">
+            <label for="expense-date">Ngày</label>
+            <input id="expense-date" name="date" type="date" required />
+          </div>
+          <div class="field-grid">
+            <label for="expense-category">Danh mục</label>
+            <select id="expense-category" name="category" required>
+              <option value="Ăn uống">Ăn uống</option>
+              <option value="Di chuyển">Di chuyển</option>
+              <option value="Nhà ở">Nhà ở</option>
+              <option value="Hóa đơn">Hóa đơn</option>
+              <option value="Giải trí">Giải trí</option>
+              <option value="Sức khỏe">Sức khỏe</option>
+              <option value="Mua sắm">Mua sắm</option>
+              <option value="Khác">Khác</option>
+            </select>
+          </div>
+          <div class="field-grid">
+            <label for="expense-amount">Số tiền (VND)</label>
+            <input id="expense-amount" name="amount" type="number" min="1000" step="1000" required />
+          </div>
+          <div class="field-grid">
+            <label for="expense-method">Thanh toán</label>
+            <select id="expense-method" name="method" required>
+              <option value="Tiền mặt">Tiền mặt</option>
+              <option value="Chuyển khoản">Chuyển khoản</option>
+              <option value="Thẻ tín dụng">Thẻ tín dụng</option>
+              <option value="Ví điện tử">Ví điện tử</option>
+            </select>
+          </div>
+          <div class="field-grid span-2">
+            <label for="expense-note">Ghi chú</label>
+            <input id="expense-note" name="note" type="text" placeholder="Ví dụ: Cà phê sáng" maxlength="120" />
+          </div>
+          <div class="span-2 form-actions">
+            <button type="submit" class="primary-btn">Lưu giao dịch</button>
+            <p id="form-status" class="hint" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </section>
+
+      <section id="records-section" class="panel records-section is-collapsed" aria-label="Lịch sử giao dịch">
+        <div class="panel-heading panel-heading-tight">
+          <h3>Lịch sử giao dịch</h3>
+          <button
+            id="toggle-records-content"
+            class="ghost-btn tiny records-content-toggle"
+            type="button"
+            aria-controls="records-collapse"
+            aria-expanded="false"
+          >
+            Hiện
+          </button>
+        </div>
+        <div id="records-collapse" class="records-collapse" aria-hidden="true">
+          <div class="records-collapse-inner">
+            <div class="table-head">
+              <p id="records-filter-summary" class="hint">Danh sách giao dịch đã lưu.</p>
+              <button id="clear-all" type="button" class="danger-btn">Xóa tất cả</button>
+            </div>
+            <div class="records-filters" aria-label="Bộ lọc lịch sử giao dịch">
+              <div class="field-grid">
+                <label for="records-filter-query">Tìm nhanh</label>
+                <input
+                  id="records-filter-query"
+                  type="text"
+                  placeholder="Ghi chú, danh mục, ngày, số tiền..."
+                  autocomplete="off"
+                />
+              </div>
+              <div class="records-filter-actions">
+                <button id="records-filter-reset" type="button" class="ghost-btn tiny">Xóa lọc</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ngày</th>
+                    <th>Danh mục</th>
+                    <th>Số tiền</th>
+                    <th>Thanh toán</th>
+                    <th>Ghi chú</th>
+                    <th>Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody id="records-body"></tbody>
+              </table>
+              <div id="records-pagination" class="pagination-controls" style="display: none;">
+                <button id="pagination-prev" type="button" class="ghost-btn tiny">Trước</button>
+                <span id="pagination-info">Trang 1</span>
+                <button id="pagination-next" type="button" class="ghost-btn tiny">Sau</button>
+              </div>
+              <p id="empty-state" class="empty-state">Chưa có dữ liệu. Hãy nhập giao dịch đầu tiên.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <template id="record-row-template">
+      <tr>
+        <td data-col="date" data-label="Ngày"></td>
+        <td data-col="category" data-label="Danh mục"></td>
+        <td data-col="amount" data-label="Số tiền" class="amount"></td>
+        <td data-col="method" data-label="Thanh toán"></td>
+        <td data-col="note" data-label="Ghi chú"></td>
+        <td class="row-actions" data-label="Thao tác">
+          <button type="button" data-action="edit" class="ghost-btn tiny">Sửa</button>
+          <button type="button" data-action="delete" class="danger-btn tiny">Xóa</button>
+        </td>
+      </tr>
+    </template>
+
+    <dialog id="edit-record-dialog" class="confirm-dialog">
+      <form id="edit-record-form" method="dialog" class="confirm-dialog-content">
+        <h3>Chỉnh sửa giao dịch</h3>
+        <input id="edit-record-id" type="hidden" />
+        <div class="form-grid">
+          <div class="field-grid">
+            <label for="edit-expense-date">Ngày</label>
+            <input id="edit-expense-date" type="date" required />
+          </div>
+          <div class="field-grid">
+            <label for="edit-expense-category">Danh mục</label>
+            <select id="edit-expense-category" required>
+              <option value="Ăn uống">Ăn uống</option>
+              <option value="Di chuyển">Di chuyển</option>
+              <option value="Nhà ở">Nhà ở</option>
+              <option value="Hóa đơn">Hóa đơn</option>
+              <option value="Giải trí">Giải trí</option>
+              <option value="Sức khỏe">Sức khỏe</option>
+              <option value="Mua sắm">Mua sắm</option>
+              <option value="Khác">Khác</option>
+            </select>
+          </div>
+          <div class="field-grid">
+            <label for="edit-expense-amount">Số tiền (VND)</label>
+            <input id="edit-expense-amount" type="number" min="1000" step="1000" required />
+          </div>
+          <div class="field-grid">
+            <label for="edit-expense-method">Thanh toán</label>
+            <select id="edit-expense-method" required>
+              <option value="Tiền mặt">Tiền mặt</option>
+              <option value="Chuyển khoản">Chuyển khoản</option>
+              <option value="Thẻ tín dụng">Thẻ tín dụng</option>
+              <option value="Ví điện tử">Ví điện tử</option>
+            </select>
+          </div>
+          <div class="field-grid span-2">
+            <label for="edit-expense-note">Ghi chú</label>
+            <input id="edit-expense-note" type="text" maxlength="120" />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button id="edit-record-cancel" type="button" class="ghost-btn">Hủy</button>
+          <button id="edit-record-save" type="submit" class="primary-btn">Lưu thay đổi</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="update-link-dialog" class="confirm-dialog">
+      <form method="dialog" class="confirm-dialog-content">
+        <h3>Link cập nhật phiên bản</h3>
+        <input id="update-link-value" type="text" readonly />
+        <div class="settings-actions">
+          <button id="update-link-close" type="submit" class="primary-btn">Đóng</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="delete-confirm-dialog" class="confirm-dialog">
+      <form id="delete-confirm-form" method="dialog" class="confirm-dialog-content">
+        <h3>Xác nhận xóa</h3>
+        <p>Bạn có chắc muốn xóa giao dịch này?</p>
+        <input id="delete-confirm-record-id" type="hidden" />
+        <div class="settings-actions">
+          <button type="submit" class="danger-btn">Xóa</button>
+          <button type="button" id="delete-confirm-cancel" class="ghost-btn">Hủy</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="clear-all-confirm-dialog" class="confirm-dialog">
+      <form id="clear-all-confirm-form" method="dialog" class="confirm-dialog-content">
+        <h3>Xác nhận xóa tất cả</h3>
+        <p>Bạn có chắc muốn xóa toàn bộ giao dịch đã lưu trên máy?</p>
+        <div class="settings-actions">
+          <button type="submit" class="danger-btn">Xóa tất cả</button>
+          <button type="button" id="clear-all-confirm-cancel" class="ghost-btn">Hủy</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>

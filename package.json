@@ -1,0 +1,19 @@
+{
+  "name": "test1",
+  "version": "1.0.0",
+  "description": "Daily expense tracker with Google Sheet sync and Android WebView build scripts.",
+  "main": "app.js",
+  "scripts": {
+    "android:sync": "powershell -NoProfile -ExecutionPolicy Bypass -File android/sync-web-assets.ps1",
+    "android:build": "powershell -NoProfile -ExecutionPolicy Bypass -File android/build-apk.ps1",
+    "android:install": "powershell -NoProfile -ExecutionPolicy Bypass -File android/install-apk.ps1",
+    "android:sync:bash": "bash android/sync-web-assets.sh",
+    "android:build:bash": "bash android/build-apk.sh",
+    "android:install:bash": "bash android/install-apk.sh",
+    "test": "node --test tests/*.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

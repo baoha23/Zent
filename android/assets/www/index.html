@@ -17,6 +17,36 @@
     <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="48x48" href="assets/icons/favicon-48.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="assets/icons/apple-touch-icon.png" />
+    <script>
+      (function () {
+        var docEl = document.documentElement;
+        var nav = typeof navigator !== "undefined" ? navigator : null;
+        var hasAndroidBridge =
+          typeof window !== "undefined" &&
+          window.AndroidReminderBridge &&
+          typeof window.AndroidReminderBridge === "object";
+        var hardwareConcurrency = nav ? Number(nav.hardwareConcurrency || 0) : 0;
+        var deviceMemory = nav ? Number(nav.deviceMemory || 0) : 0;
+        var hasCoarsePointer =
+          typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(pointer: coarse)").matches;
+        var prefersReducedMotion =
+          typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (hasAndroidBridge) docEl.classList.add("android-webview");
+        if (
+          hasAndroidBridge ||
+          prefersReducedMotion ||
+          hasCoarsePointer ||
+          (deviceMemory > 0 && deviceMemory <= 4) ||
+          (hardwareConcurrency > 0 && hardwareConcurrency <= 4)
+        ) {
+          docEl.classList.add("performance-lite");
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -126,6 +156,65 @@
             <option value="120">2 giờ</option>
           </select>
         </div>
+        <section class="recurring-rules-section" aria-labelledby="recurring-rules-title">
+          <div class="panel-heading panel-heading-tight">
+            <div>
+              <h4 id="recurring-rules-title">Khoản chi định kỳ</h4>
+              <p class="hint">Tự tạo giao dịch theo tháng khi tới ngày đến hạn.</p>
+            </div>
+          </div>
+          <form id="recurring-rule-form" class="form-grid recurring-rule-form">
+            <input id="recurring-rule-id" type="hidden" />
+            <div class="field-grid">
+              <label for="recurring-rule-amount">Số tiền (VND)</label>
+              <input id="recurring-rule-amount" type="number" min="1000" step="1000" required />
+            </div>
+            <div class="field-grid">
+              <label for="recurring-rule-category">Danh mục</label>
+              <select id="recurring-rule-category" required>
+                <option value="Ăn uống">Ăn uống</option>
+                <option value="Di chuyển">Di chuyển</option>
+                <option value="Nhà ở">Nhà ở</option>
+                <option value="Hóa đơn">Hóa đơn</option>
+                <option value="Giải trí">Giải trí</option>
+                <option value="Sức khỏe">Sức khỏe</option>
+                <option value="Mua sắm">Mua sắm</option>
+                <option value="Khác">Khác</option>
+              </select>
+            </div>
+            <div class="field-grid">
+              <label for="recurring-rule-method">Thanh toán</label>
+              <select id="recurring-rule-method" required>
+                <option value="Tiền mặt">Tiền mặt</option>
+                <option value="Chuyển khoản">Chuyển khoản</option>
+                <option value="Thẻ tín dụng">Thẻ tín dụng</option>
+                <option value="Ví điện tử">Ví điện tử</option>
+              </select>
+            </div>
+            <div class="field-grid">
+              <label for="recurring-rule-day">Ngày lặp</label>
+              <input id="recurring-rule-day" type="number" min="1" max="31" required />
+            </div>
+            <div class="field-grid">
+              <label for="recurring-rule-start-date">Bắt đầu từ</label>
+              <input id="recurring-rule-start-date" type="date" required />
+            </div>
+            <label class="checkbox-field field-grid">
+              <span>Bật tự động</span>
+              <input id="recurring-rule-active" type="checkbox" checked />
+            </label>
+            <div class="field-grid span-2">
+              <label for="recurring-rule-note">Ghi chú</label>
+              <input id="recurring-rule-note" type="text" maxlength="120" placeholder="Ví dụ: Tiền nhà" />
+            </div>
+            <div class="span-2 settings-actions">
+              <button id="recurring-rule-submit" type="submit" class="primary-btn">Lưu khoản định kỳ</button>
+              <button id="recurring-rule-cancel" type="button" class="ghost-btn hidden">Hủy chỉnh sửa</button>
+            </div>
+          </form>
+          <div id="recurring-rules-list" class="recurring-rules-list"></div>
+          <p id="recurring-rules-empty" class="empty-state">Chưa có khoản chi định kỳ nào.</p>
+        </section>
         <p class="hint">
           Chỉ cần nhập URL khi bạn muốn đồng bộ lên Google Sheet. Link cập nhật:
           <a

@@ -57,6 +57,10 @@ html {
   scroll-behavior: smooth;
 }
 
+html.performance-lite {
+  scroll-behavior: auto;
+}
+
 html,
 body {
   width: 100%;
@@ -79,6 +83,171 @@ body {
   transition: background 360ms ease, color 260ms ease;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body.android-webview {
+  background-attachment: scroll;
+}
+
+html.performance-lite body,
+body.performance-lite {
+  background:
+    linear-gradient(168deg, var(--bg-soft) 0%, var(--bg) 35%, var(--bg) 100%);
+  background-attachment: scroll;
+  transition: none;
+}
+
+body.android-webview .topbar,
+body.android-webview .panel,
+body.android-webview .confirm-dialog,
+html.android-webview .topbar,
+html.android-webview .panel,
+html.android-webview .confirm-dialog,
+body.performance-lite .topbar,
+body.performance-lite .panel,
+body.performance-lite .confirm-dialog,
+html.performance-lite .topbar,
+html.performance-lite .panel,
+html.performance-lite .confirm-dialog {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+body.android-webview .topbar,
+html.android-webview .topbar,
+body.performance-lite .topbar,
+html.performance-lite .topbar {
+  position: static;
+}
+
+body.android-webview th,
+html.android-webview th,
+body.performance-lite th,
+html.performance-lite th,
+body.performance-lite .settings-popup-head,
+html.performance-lite .settings-popup-head,
+body.performance-lite .settings-backdrop,
+html.performance-lite .settings-backdrop,
+body.performance-lite .confirm-dialog::backdrop,
+html.performance-lite .confirm-dialog::backdrop {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--surface);
+}
+
+body.performance-lite .settings-backdrop,
+html.performance-lite .settings-backdrop,
+body.performance-lite .confirm-dialog::backdrop,
+html.performance-lite .confirm-dialog::backdrop {
+  background: rgba(6, 10, 15, 0.22);
+}
+
+body.performance-lite .topbar:hover,
+body.performance-lite .panel:hover,
+html.performance-lite .topbar:hover,
+html.performance-lite .panel:hover,
+body.performance-lite .stat-card:hover,
+html.performance-lite .stat-card:hover,
+body.performance-lite .monthly-summary-item:hover,
+html.performance-lite .monthly-summary-item:hover,
+body.performance-lite tbody tr:hover,
+html.performance-lite tbody tr:hover,
+body.performance-lite .primary-btn:hover,
+body.performance-lite .ghost-btn:hover,
+body.performance-lite .danger-btn:hover,
+body.performance-lite .update-link-btn:hover,
+html.performance-lite .primary-btn:hover,
+html.performance-lite .ghost-btn:hover,
+html.performance-lite .danger-btn:hover,
+html.performance-lite .update-link-btn:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+body.performance-lite .app-avatar,
+body.performance-lite .topbar,
+body.performance-lite .panel,
+body.performance-lite .confirm-dialog,
+body.performance-lite .settings-backdrop,
+body.performance-lite .settings-popup-head,
+body.performance-lite .primary-btn,
+body.performance-lite .ghost-btn,
+body.performance-lite .danger-btn,
+body.performance-lite .update-link-btn,
+body.performance-lite .stat-card,
+body.performance-lite .monthly-summary-item,
+body.performance-lite tbody tr,
+body.performance-lite .records-collapse,
+body.performance-lite .monthly-summary-bar,
+body.performance-lite input,
+body.performance-lite select,
+body.performance-lite #form-status,
+html.performance-lite .app-avatar,
+html.performance-lite .topbar,
+html.performance-lite .panel,
+html.performance-lite .confirm-dialog,
+html.performance-lite .settings-backdrop,
+html.performance-lite .settings-popup-head,
+html.performance-lite .primary-btn,
+html.performance-lite .ghost-btn,
+html.performance-lite .danger-btn,
+html.performance-lite .update-link-btn,
+html.performance-lite .stat-card,
+html.performance-lite .monthly-summary-item,
+html.performance-lite tbody tr,
+html.performance-lite .records-collapse,
+html.performance-lite .monthly-summary-bar,
+html.performance-lite input,
+html.performance-lite select,
+html.performance-lite #form-status {
+  transition: none;
+}
+
+body.performance-lite .primary-btn,
+body.performance-lite .ghost-btn,
+body.performance-lite .danger-btn,
+body.performance-lite .update-link-btn,
+html.performance-lite .primary-btn,
+html.performance-lite .ghost-btn,
+html.performance-lite .danger-btn,
+html.performance-lite .update-link-btn {
+  will-change: auto;
+}
+
+body.performance-lite .primary-btn::after,
+body.performance-lite .ghost-btn::after,
+body.performance-lite .danger-btn::after,
+html.performance-lite .primary-btn::after,
+html.performance-lite .ghost-btn::after,
+html.performance-lite .danger-btn::after {
+  display: none;
+}
+
+body.performance-lite .app-avatar:hover,
+html.performance-lite .app-avatar:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+body.performance-lite .panel,
+html.performance-lite .panel {
+  content-visibility: visible;
+  contain: none;
+}
+
+body.performance-lite .app-shell > *:not(#settings-panel):not(#settings-backdrop),
+html.performance-lite .app-shell > *:not(#settings-panel):not(#settings-backdrop) {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+
+body.performance-lite .table-wrap,
+html.performance-lite .table-wrap {
+  scroll-behavior: auto;
 }
 
 .app-shell {
@@ -711,6 +880,95 @@ button:focus-visible,
   flex-wrap: wrap;
 }
 
+.checkbox-field {
+  align-content: start;
+}
+
+.checkbox-field input {
+  width: auto;
+  margin: 0;
+  justify-self: start;
+}
+
+.recurring-rules-section {
+  margin-top: 0.95rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 84%, transparent 16%);
+}
+
+.recurring-rule-form {
+  margin-top: 0.65rem;
+}
+
+.recurring-rules-list {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.recurring-rule-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface) 28%);
+  padding: 0.72rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.recurring-rule-item.is-paused {
+  opacity: 0.8;
+}
+
+.recurring-rule-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.recurring-rule-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.recurring-rule-meta,
+.recurring-rule-note {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.recurring-rule-note {
+  margin-top: 0;
+}
+
+.recurring-rule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.record-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.18rem;
+  min-height: 1.5rem;
+  padding: 0.12rem 0.48rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent 72%);
+  background: color-mix(in srgb, var(--accent) 10%, transparent 90%);
+  color: color-mix(in srgb, var(--accent) 74%, var(--text) 26%);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.recurring-rule-badge {
+  align-self: start;
+}
+
 .interval-select {
   padding: 0.4rem 0.6rem;
   font-size: 0.9rem;
@@ -828,6 +1086,13 @@ tbody tr {
 
 tbody tr:hover {
   background: color-mix(in srgb, var(--accent) 4%, transparent 96%);
+}
+
+.record-category-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
 }
 
 .amount {

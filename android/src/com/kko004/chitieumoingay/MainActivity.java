@@ -5,10 +5,12 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
 import android.util.Log;
+import android.view.View;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -34,6 +36,10 @@ public class MainActivity extends Activity {
 
     webView = new WebView(this);
     setContentView(webView);
+    webView.setBackgroundColor(Color.parseColor("#0e1210"));
+    // Keep the WebView on hardware rendering for smoother scrolling.
+    // The web UI now disables blur-heavy effects on Android during page load.
+    webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
     final boolean isDebuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
       WebView.setWebContentsDebuggingEnabled(isDebuggable);

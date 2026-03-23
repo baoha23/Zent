@@ -1,7 +1,13 @@
 ﻿
-const STORAGE_KEYS = { records: "expense_records_v1", settings: "expense_settings_v1" };
+const STORAGE_KEYS = {
+  records: "expense_records_v1",
+  settings: "expense_settings_v1",
+  recurringRules: "expense_recurring_rules_v1",
+  recurringSuppressions: "expense_recurring_suppressions_v1",
+};
 const SYNC_STATUS = { synced: "synced", pending: "pending", failed: "failed", local: "local" };
 const THEMES = { light: "light", dark: "dark" };
+const RECORD_SOURCE = { manual: "manual", recurring: "recurring" };
 const MAX_RECORDS = 8000;
 const MAX_RECORDS_PER_PAGE = 50;
 const RECORDS_FILTER_INPUT_DEBOUNCE_MS = 120;
@@ -33,6 +39,8 @@ const NUMBER_FORMATTERS = {
 
 const state = {
   records: [],
+  recurringRules: [],
+  recurringSuppressions: [],
   settings: {
     sheetEndpoint: "",
     apiKey: "",
@@ -51,7 +59,15 @@ const state = {
     sortedRecordsVersion: -1,
     categorySummaryCache: null,
     categorySummaryCacheVersion: -1,
+    recordsDerivedCache: null,
+    recordsDerivedCacheVersion: -1,
+    filteredRecordsCache: [],
+    filteredRecordsVersion: -1,
+    filteredRecordsQuery: "",
     recordSearchCache: new Map(),
+    recurringSuppressionCache: new Set(),
+    recurringSuppressionCacheVersion: -1,
+    recurringSuppressionsVersion: 0,
     pendingRecordsRenderHandle: null,
     recordsFilterInputHandle: null,
     currentPage: 1,
@@ -89,6 +105,19 @@ const dom = HAS_DOCUMENT
       monthlyBudgetInput: document.querySelector("#monthly-budget"),
       endpointInput: document.querySelector("#sheet-endpoint"),
       apiKeyInput: document.querySelector("#sheet-api-key"),
+      recurringRuleForm: document.querySelector("#recurring-rule-form"),
+      recurringRuleIdInput: document.querySelector("#recurring-rule-id"),
+      recurringRuleAmountInput: document.querySelector("#recurring-rule-amount"),
+      recurringRuleCategoryInput: document.querySelector("#recurring-rule-category"),
+      recurringRuleMethodInput: document.querySelector("#recurring-rule-method"),
+      recurringRuleDayInput: document.querySelector("#recurring-rule-day"),
+      recurringRuleStartDateInput: document.querySelector("#recurring-rule-start-date"),
+      recurringRuleNoteInput: document.querySelector("#recurring-rule-note"),
+      recurringRuleActiveInput: document.querySelector("#recurring-rule-active"),
+      recurringRuleSubmitBtn: document.querySelector("#recurring-rule-submit"),
+      recurringRuleCancelBtn: document.querySelector("#recurring-rule-cancel"),
+      recurringRulesList: document.querySelector("#recurring-rules-list"),
+      recurringRulesEmpty: document.querySelector("#recurring-rules-empty"),
       saveSettingsBtn: document.querySelector("#save-settings"),
       syncPendingBtn: document.querySelector("#sync-pending"),
       settingsPanel: document.querySelector("#settings-panel"),
@@ -127,6 +156,53 @@ const dom = HAS_DOCUMENT
       paginationInfo: document.querySelector("#pagination-info"),
     }
   : {};
+
+function getRuntimeUiProfile() {
+  const hasAndroidBridge =
+    typeof window !== "undefined" &&
+    window.AndroidReminderBridge &&
+    typeof window.AndroidReminderBridge === "object";
+  const hardwareConcurrency =
+    typeof navigator !== "undefined"
+      ? Number(navigator.hardwareConcurrency || 0)
+      : 0;
+  const deviceMemory =
+    typeof navigator !== "undefined"
+      ? Number(navigator.deviceMemory || 0)
+      : 0;
+  const hasCoarsePointer =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches;
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  return {
+    hasAndroidBridge: Boolean(hasAndroidBridge),
+    prefersPerformanceLite:
+      Boolean(hasAndroidBridge) ||
+      prefersReducedMotion ||
+      hasCoarsePointer ||
+      (deviceMemory > 0 && deviceMemory <= 4) ||
+      (hardwareConcurrency > 0 && hardwareConcurrency <= 4),
+  };
+}
+
+function applyRuntimePlatformClass() {
+  if (typeof document === "undefined") return;
+  const profile = getRuntimeUiProfile();
+  const targets = [document.documentElement, document.body].filter(
+    (element) => element && typeof element.classList?.toggle === "function"
+  );
+  for (const target of targets) {
+    target.classList.toggle("android-webview", profile.hasAndroidBridge);
+    target.classList.toggle("performance-lite", profile.prefersPerformanceLite);
+  }
+}
+
+applyRuntimePlatformClass();
 
 function safeGetLocalStorage(key) {
   try {
@@ -211,6 +287,7 @@ function normalizeHumanText(value, maxLength) {
 function normalizeTextLoose(value) {
   return String(value || "")
     .toLowerCase()
+    .replace(/đ/g, "d")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\w\s]/g, " ")
@@ -276,6 +353,16 @@ function normalizeSyncStatus(value) {
     : SYNC_STATUS.local;
 }
 
+function normalizeRecordSource(value) {
+  return value === RECORD_SOURCE.recurring ? RECORD_SOURCE.recurring : RECORD_SOURCE.manual;
+}
+
+function normalizeDayOfMonth(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.min(31, Math.max(1, numeric));
+}
+
 function getLocalDateKey(baseDate = new Date()) {
   const year = baseDate.getFullYear();
   const month = String(baseDate.getMonth() + 1).padStart(2, "0");
@@ -311,11 +398,119 @@ function makeId() {
   return `rec_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 }
 
+function makeRecurringRuleId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return `rule_${crypto.randomUUID()}`;
+  return `rule_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+}
+
+function makeRecurringOccurrenceKey(ruleId, monthKey) {
+  const recurringRuleId = String(ruleId || "").trim();
+  const normalizedMonthKey = normalizeMonthFilter(monthKey);
+  return recurringRuleId && normalizedMonthKey ? `${recurringRuleId}:${normalizedMonthKey}` : "";
+}
+
+function makeRecurringLookupKey(recurringRuleId, recurringOccurrenceKey) {
+  const ruleId = String(recurringRuleId || "").trim();
+  const occurrenceKey = String(recurringOccurrenceKey || "").trim();
+  return ruleId && occurrenceKey ? `${ruleId}|${occurrenceKey}` : "";
+}
+
+function normalizeRecurringOccurrenceKey(value, ruleId, fallbackDate) {
+  const raw = String(value || "").trim();
+  if (raw) {
+    const match = raw.match(/^(.+):(\d{4}-\d{2})$/);
+    if (match) return makeRecurringOccurrenceKey(match[1], match[2]);
+  }
+  const recurringRuleId = String(ruleId || "").trim();
+  const monthKey = getMonthKeyFromDate(fallbackDate);
+  return recurringRuleId && monthKey ? makeRecurringOccurrenceKey(recurringRuleId, monthKey) : "";
+}
+
+function normalizeRecurringRule(rule) {
+  if (!rule || typeof rule !== "object") return null;
+  const rawAmount = Number(rule.amount);
+  if (!Number.isFinite(rawAmount) || rawAmount <= 0) return null;
+  const startDate = normalizeDateKey(rule.startDate, rule.createdAt);
+  return {
+    id: String(rule.id || makeRecurringRuleId()),
+    amount: Math.round(rawAmount),
+    category: normalizeCategoryName(rule.category, "Khác"),
+    method: normalizePaymentMethodName(rule.method, "Tiền mặt"),
+    note: normalizeHumanText(rule.note, 120),
+    dayOfMonth: normalizeDayOfMonth(rule.dayOfMonth),
+    startDate,
+    active: rule.active !== false,
+    createdAt: normalizeCreatedAt(rule.createdAt, startDate),
+    updatedAt: normalizeCreatedAt(rule.updatedAt || rule.createdAt, startDate),
+  };
+}
+
+function normalizeRecurringSuppression(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const recurringRuleId = String(entry.recurringRuleId || "").trim();
+  const recurringOccurrenceKey = normalizeRecurringOccurrenceKey(
+    entry.recurringOccurrenceKey,
+    recurringRuleId,
+    entry.date || entry.monthKey || ""
+  );
+  if (!recurringRuleId || !recurringOccurrenceKey) return null;
+  return {
+    recurringRuleId,
+    recurringOccurrenceKey,
+    deletedAt: normalizeCreatedAt(entry.deletedAt, getMonthKeyFromDate(recurringOccurrenceKey.split(":").pop()) ? `${recurringOccurrenceKey.split(":").pop()}-01` : getLocalDateKey()),
+  };
+}
+
+function getDaysInMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0).getDate();
+}
+
+function getScheduledDateForRecurringMonth(rule, monthKey) {
+  const normalizedMonthKey = normalizeMonthFilter(monthKey);
+  if (!normalizedMonthKey) return "";
+  const parts = normalizedMonthKey.split("-");
+  const year = Number(parts[0]);
+  const monthIndex = Number(parts[1]) - 1;
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || monthIndex < 0 || monthIndex > 11) return "";
+  const day = Math.min(getDaysInMonth(year, monthIndex), normalizeDayOfMonth(rule?.dayOfMonth));
+  return `${normalizedMonthKey}-${String(day).padStart(2, "0")}`;
+}
+
+function getRecurringDueMonthKeys(rule, asOfDate = getLocalDateKey()) {
+  const normalizedRule = normalizeRecurringRule(rule);
+  const asOfDateKey = normalizeDateKey(asOfDate);
+  if (!normalizedRule || !normalizedRule.active) return [];
+  const startMonthKey = getMonthKeyFromDate(normalizedRule.startDate);
+  const endMonthKey = getMonthKeyFromDate(asOfDateKey);
+  if (!startMonthKey || !endMonthKey || startMonthKey.localeCompare(endMonthKey) > 0) return [];
+
+  const months = [];
+  let current = `${startMonthKey}-01`;
+  const end = `${endMonthKey}-01`;
+  while (current <= end) {
+    const monthKey = current.slice(0, 7);
+    const scheduledDate = getScheduledDateForRecurringMonth(normalizedRule, monthKey);
+    if (scheduledDate && scheduledDate >= normalizedRule.startDate && scheduledDate <= asOfDateKey) {
+      months.push(monthKey);
+    }
+    const next = new Date(`${current}T00:00:00`);
+    next.setMonth(next.getMonth() + 1);
+    current = `${getLocalMonthKey(next)}-01`;
+  }
+  return months;
+}
+
 function normalizeRecord(record) {
   if (!record || typeof record !== "object") return null;
   const rawAmount = Number(record.amount);
   if (!Number.isFinite(rawAmount) || rawAmount <= 0) return null;
   const date = normalizeDateKey(record.date, record.createdAt);
+  const source = normalizeRecordSource(record.source);
+  const recurringRuleId = source === RECORD_SOURCE.recurring ? String(record.recurringRuleId || "").trim() : "";
+  const recurringOccurrenceKey = source === RECORD_SOURCE.recurring
+    ? normalizeRecurringOccurrenceKey(record.recurringOccurrenceKey, recurringRuleId, date)
+    : "";
+  const hasRecurringIdentity = Boolean(recurringRuleId && recurringOccurrenceKey);
   return {
     id: String(record.id || makeId()),
     date,
@@ -326,6 +521,9 @@ function normalizeRecord(record) {
     createdAt: normalizeCreatedAt(record.createdAt, date),
     updatedAt: normalizeCreatedAt(record.updatedAt || record.createdAt, date),
     syncStatus: normalizeSyncStatus(record.syncStatus),
+    source: hasRecurringIdentity ? RECORD_SOURCE.recurring : RECORD_SOURCE.manual,
+    recurringRuleId: hasRecurringIdentity ? recurringRuleId : "",
+    recurringOccurrenceKey: hasRecurringIdentity ? recurringOccurrenceKey : "",
   };
 }
 
@@ -585,9 +783,19 @@ function ensureRuntimeCaches() {
   if (!Array.isArray(state.runtime.sortedRecordsCache)) state.runtime.sortedRecordsCache = [];
   if (!Number.isFinite(state.runtime.categorySummaryCacheVersion)) state.runtime.categorySummaryCacheVersion = -1;
   if (!state.runtime.categorySummaryCache || typeof state.runtime.categorySummaryCache !== "object") state.runtime.categorySummaryCache = null;
+  if (!Number.isFinite(state.runtime.recordsDerivedCacheVersion)) state.runtime.recordsDerivedCacheVersion = -1;
+  if (!state.runtime.recordsDerivedCache || typeof state.runtime.recordsDerivedCache !== "object") state.runtime.recordsDerivedCache = null;
+  if (!Number.isFinite(state.runtime.filteredRecordsVersion)) state.runtime.filteredRecordsVersion = -1;
+  if (!Array.isArray(state.runtime.filteredRecordsCache)) state.runtime.filteredRecordsCache = [];
+  if (typeof state.runtime.filteredRecordsQuery !== "string") state.runtime.filteredRecordsQuery = "";
   if (!(state.runtime.recordSearchCache instanceof Map)) state.runtime.recordSearchCache = new Map();
+  if (!(state.runtime.recurringSuppressionCache instanceof Set)) state.runtime.recurringSuppressionCache = new Set();
+  if (!Number.isFinite(state.runtime.recurringSuppressionCacheVersion)) state.runtime.recurringSuppressionCacheVersion = -1;
+  if (!Number.isFinite(state.runtime.recurringSuppressionsVersion)) state.runtime.recurringSuppressionsVersion = 0;
   if (state.runtime.pendingRecordsRenderHandle === undefined) state.runtime.pendingRecordsRenderHandle = null;
   if (state.runtime.recordsFilterInputHandle === undefined) state.runtime.recordsFilterInputHandle = null;
+  if (!Number.isFinite(state.runtime.currentPage) || state.runtime.currentPage < 1) state.runtime.currentPage = 1;
+  if (typeof state.runtime.isOnline !== "boolean") state.runtime.isOnline = typeof navigator !== "undefined" ? navigator.onLine : true;
 }
 
 function clearPendingFilterInputRender() {
@@ -628,7 +836,19 @@ function markRecordsDirty() {
   state.runtime.sortedRecordsCache = [];
   state.runtime.categorySummaryCacheVersion = -1;
   state.runtime.categorySummaryCache = null;
+  state.runtime.recordsDerivedCacheVersion = -1;
+  state.runtime.recordsDerivedCache = null;
+  state.runtime.filteredRecordsVersion = -1;
+  state.runtime.filteredRecordsCache = [];
+  state.runtime.filteredRecordsQuery = "";
   state.runtime.recordSearchCache.clear();
+}
+
+function markRecurringSuppressionsDirty() {
+  ensureRuntimeCaches();
+  state.runtime.recurringSuppressionsVersion += 1;
+  state.runtime.recurringSuppressionCacheVersion = -1;
+  state.runtime.recurringSuppressionCache = new Set();
 }
 
 function persistRecords() {
@@ -640,10 +860,26 @@ function persistSettings() {
   safeSetLocalStorage(STORAGE_KEYS.settings, JSON.stringify(state.settings));
 }
 
+function persistRecurringState() {
+  safeSetLocalStorage(STORAGE_KEYS.recurringRules, JSON.stringify(state.recurringRules));
+  safeSetLocalStorage(STORAGE_KEYS.recurringSuppressions, JSON.stringify(state.recurringSuppressions));
+}
+
+function dedupeRecurringSuppressions(entries) {
+  const unique = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const normalized = normalizeRecurringSuppression(entry);
+    if (!normalized) continue;
+    const key = `${normalized.recurringRuleId}|${normalized.recurringOccurrenceKey}`;
+    if (!unique.has(key)) unique.set(key, normalized);
+  }
+  return Array.from(unique.values());
+}
+
 function loadStateFromStorage() {
   try {
     const raw = safeGetLocalStorage(STORAGE_KEYS.records);
-    if (raw) state.records = JSON.parse(raw).map((item) => normalizeRecord(item)).filter(Boolean).slice(0, MAX_RECORDS);
+    state.records = raw ? JSON.parse(raw).map((item) => normalizeRecord(item)).filter(Boolean).slice(0, MAX_RECORDS) : [];
   } catch (_error) {
     state.records = [];
   }
@@ -653,17 +889,129 @@ function loadStateFromStorage() {
   } catch (_error) {
     state.settings = normalizeSettings(null);
   }
+  try {
+    const raw = safeGetLocalStorage(STORAGE_KEYS.recurringRules);
+    state.recurringRules = raw ? JSON.parse(raw).map((item) => normalizeRecurringRule(item)).filter(Boolean) : [];
+  } catch (_error) {
+    state.recurringRules = [];
+  }
+  try {
+    const raw = safeGetLocalStorage(STORAGE_KEYS.recurringSuppressions);
+    state.recurringSuppressions = raw ? dedupeRecurringSuppressions(JSON.parse(raw)) : [];
+  } catch (_error) {
+    state.recurringSuppressions = [];
+  }
+  markRecurringSuppressionsDirty();
   markRecordsDirty();
   updateAutoSyncState();
 }
 
-function getAvailableCategories() {
-  const set = new Set(normalizeCategories(state.settings.categories));
-  for (const record of state.records) {
-    const category = normalizeCategoryName(record.category, "");
-    if (category) set.add(category);
+function getRecurringSuppressionKeySet() {
+  ensureRuntimeCaches();
+  if (state.runtime.recurringSuppressionCacheVersion === state.runtime.recurringSuppressionsVersion) {
+    return state.runtime.recurringSuppressionCache;
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, "vi"));
+  const cache = new Set();
+  for (const entry of state.recurringSuppressions) {
+    const lookupKey = makeRecurringLookupKey(entry.recurringRuleId, entry.recurringOccurrenceKey);
+    if (lookupKey) cache.add(lookupKey);
+  }
+  state.runtime.recurringSuppressionCache = cache;
+  state.runtime.recurringSuppressionCacheVersion = state.runtime.recurringSuppressionsVersion;
+  return cache;
+}
+
+function isRecurringOccurrenceSuppressed(recurringRuleId, recurringOccurrenceKey) {
+  const lookupKey = makeRecurringLookupKey(recurringRuleId, recurringOccurrenceKey);
+  return Boolean(lookupKey) && getRecurringSuppressionKeySet().has(lookupKey);
+}
+
+function addRecurringSuppression(recurringRuleId, recurringOccurrenceKey, deletedAt = new Date().toISOString()) {
+  const normalized = normalizeRecurringSuppression({ recurringRuleId, recurringOccurrenceKey, deletedAt });
+  if (!normalized) return false;
+  const lookupKey = makeRecurringLookupKey(normalized.recurringRuleId, normalized.recurringOccurrenceKey);
+  if (!lookupKey || getRecurringSuppressionKeySet().has(lookupKey)) return false;
+  state.recurringSuppressions = [...state.recurringSuppressions, normalized];
+  markRecurringSuppressionsDirty();
+  persistRecurringState();
+  return true;
+}
+
+function removeRecurringSuppressionsForRule(recurringRuleId) {
+  const normalizedRuleId = String(recurringRuleId || "").trim();
+  if (!normalizedRuleId) return false;
+  const next = state.recurringSuppressions.filter((entry) => entry.recurringRuleId !== normalizedRuleId);
+  if (next.length === state.recurringSuppressions.length) return false;
+  state.recurringSuppressions = next;
+  markRecurringSuppressionsDirty();
+  persistRecurringState();
+  return true;
+}
+
+function findRecordByRecurringOccurrence(recurringRuleId, recurringOccurrenceKey) {
+  const lookupKey = makeRecurringLookupKey(recurringRuleId, recurringOccurrenceKey);
+  if (!lookupKey) return null;
+  return getRecordsDerivedData().recurringRecordByKey.get(lookupKey) || null;
+}
+
+function isRecurringOccurrenceHandled(recurringRuleId, recurringOccurrenceKey) {
+  return Boolean(
+    findRecordByRecurringOccurrence(recurringRuleId, recurringOccurrenceKey) ||
+    isRecurringOccurrenceSuppressed(recurringRuleId, recurringOccurrenceKey)
+  );
+}
+
+function createRecurringRecord(rule, monthKey) {
+  const scheduledDate = getScheduledDateForRecurringMonth(rule, monthKey);
+  const recurringOccurrenceKey = makeRecurringOccurrenceKey(rule.id, monthKey);
+  if (!scheduledDate || !recurringOccurrenceKey) return null;
+  return normalizeRecord({
+    id: makeId(),
+    date: scheduledDate,
+    category: rule.category,
+    amount: rule.amount,
+    method: rule.method,
+    note: rule.note,
+    createdAt: new Date(`${scheduledDate}T00:00:00`).toISOString(),
+    updatedAt: new Date(`${scheduledDate}T00:00:00`).toISOString(),
+    syncStatus: SYNC_STATUS.local,
+    source: RECORD_SOURCE.recurring,
+    recurringRuleId: rule.id,
+    recurringOccurrenceKey,
+  });
+}
+
+function generateRecurringRecords(options = {}) {
+  const asOfDate = normalizeDateKey(options.asOfDate, new Date().toISOString());
+  const generated = [];
+  for (const rule of state.recurringRules) {
+    if (!rule.active) continue;
+    const dueMonths = getRecurringDueMonthKeys(rule, asOfDate);
+    for (const monthKey of dueMonths) {
+      const recurringOccurrenceKey = makeRecurringOccurrenceKey(rule.id, monthKey);
+      if (!recurringOccurrenceKey || isRecurringOccurrenceHandled(rule.id, recurringOccurrenceKey)) continue;
+      const record = createRecurringRecord(rule, monthKey);
+      if (record) generated.push(record);
+    }
+  }
+  if (generated.length === 0) return 0;
+  state.records = [...generated, ...state.records].sort(compareRecordsByUpdatedAt).slice(0, MAX_RECORDS);
+  markRecordsDirty();
+  if (options.persist !== false) persistRecords();
+  return generated.length;
+}
+
+function getAvailableCategories() {
+  const categories = new Map();
+  for (const category of normalizeCategories(state.settings.categories)) {
+    const key = normalizeTextLoose(category);
+    if (key) categories.set(key, category);
+  }
+  for (const category of getRecordsDerivedData().availableRecordCategories) {
+    const key = normalizeTextLoose(category);
+    if (key && !categories.has(key)) categories.set(key, category);
+  }
+  return Array.from(categories.values()).sort((a, b) => a.localeCompare(b, "vi"));
 }
 
 function replaceSelectOptions(selectElement, values) {
@@ -686,6 +1034,7 @@ function refreshCategoryOptionsFromSettings() {
   const categories = getAvailableCategories();
   replaceSelectOptions(dom.categoryInput, categories);
   replaceSelectOptions(dom.editRecordCategoryInput, categories);
+  replaceSelectOptions(dom.recurringRuleCategoryInput, categories);
 }
 
 function normalizeCategoryValue(value) {
@@ -702,6 +1051,110 @@ function normalizeMethodValue(value) {
     if (normalizeTextLoose(method) === normalizeTextLoose(trimmed)) return method;
   }
   return trimmed.slice(0, 40);
+}
+
+function findRecurringRuleById(ruleId) {
+  const id = String(ruleId || "").trim();
+  return id ? state.recurringRules.find((rule) => rule.id === id) || null : null;
+}
+
+function getNextRecurringDueDateForRule(rule, fromDate = getLocalDateKey()) {
+  const normalizedRule = normalizeRecurringRule(rule);
+  const fromDateKey = normalizeDateKey(fromDate);
+  if (!normalizedRule) return "";
+  const startMonthKey = getMonthKeyFromDate(normalizedRule.startDate);
+  const fromMonthKey = getMonthKeyFromDate(fromDateKey);
+  const initialMonthKey = startMonthKey && startMonthKey.localeCompare(fromMonthKey) > 0 ? startMonthKey : fromMonthKey;
+  if (!initialMonthKey) return "";
+  let cursor = `${initialMonthKey}-01`;
+  for (let index = 0; index < 36; index += 1) {
+    const monthKey = cursor.slice(0, 7);
+    const scheduledDate = getScheduledDateForRecurringMonth(normalizedRule, monthKey);
+    if (scheduledDate && scheduledDate >= normalizedRule.startDate && scheduledDate >= fromDateKey) return scheduledDate;
+    const next = new Date(`${cursor}T00:00:00`);
+    next.setMonth(next.getMonth() + 1);
+    cursor = `${getLocalMonthKey(next)}-01`;
+  }
+  return "";
+}
+
+function sortRecurringRules(rules) {
+  return [...(Array.isArray(rules) ? rules : [])].sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    const nextA = getNextRecurringDueDateForRule(a) || "9999-12-31";
+    const nextB = getNextRecurringDueDateForRule(b) || "9999-12-31";
+    return nextA.localeCompare(nextB) || String(a.category || "").localeCompare(String(b.category || ""), "vi");
+  });
+}
+
+function resetRecurringRuleForm() {
+  if (dom.recurringRuleIdInput) dom.recurringRuleIdInput.value = "";
+  if (dom.recurringRuleAmountInput) dom.recurringRuleAmountInput.value = "";
+  if (dom.recurringRuleCategoryInput) dom.recurringRuleCategoryInput.value = getAvailableCategories()[0] || "Khác";
+  if (dom.recurringRuleMethodInput) dom.recurringRuleMethodInput.value = DEFAULT_METHODS[0];
+  if (dom.recurringRuleDayInput) dom.recurringRuleDayInput.value = String(new Date().getDate());
+  if (dom.recurringRuleStartDateInput) dom.recurringRuleStartDateInput.value = getLocalDateKey();
+  if (dom.recurringRuleNoteInput) dom.recurringRuleNoteInput.value = "";
+  if (dom.recurringRuleActiveInput) dom.recurringRuleActiveInput.checked = true;
+  if (dom.recurringRuleSubmitBtn) dom.recurringRuleSubmitBtn.textContent = "Lưu khoản định kỳ";
+  if (dom.recurringRuleCancelBtn) dom.recurringRuleCancelBtn.classList.add("hidden");
+}
+
+function populateRecurringRuleForm(ruleId) {
+  const rule = findRecurringRuleById(ruleId);
+  if (!rule) return;
+  if (dom.recurringRuleIdInput) dom.recurringRuleIdInput.value = rule.id;
+  if (dom.recurringRuleAmountInput) dom.recurringRuleAmountInput.value = String(rule.amount);
+  if (dom.recurringRuleCategoryInput) dom.recurringRuleCategoryInput.value = normalizeCategoryValue(rule.category);
+  if (dom.recurringRuleMethodInput) dom.recurringRuleMethodInput.value = normalizeMethodValue(rule.method);
+  if (dom.recurringRuleDayInput) dom.recurringRuleDayInput.value = String(rule.dayOfMonth);
+  if (dom.recurringRuleStartDateInput) dom.recurringRuleStartDateInput.value = normalizeDateKey(rule.startDate, rule.createdAt);
+  if (dom.recurringRuleNoteInput) dom.recurringRuleNoteInput.value = rule.note || "";
+  if (dom.recurringRuleActiveInput) dom.recurringRuleActiveInput.checked = Boolean(rule.active);
+  if (dom.recurringRuleSubmitBtn) dom.recurringRuleSubmitBtn.textContent = "Cập nhật khoản định kỳ";
+  if (dom.recurringRuleCancelBtn) dom.recurringRuleCancelBtn.classList.remove("hidden");
+}
+
+function renderRecurringRules() {
+  if (!dom.recurringRulesList || !dom.recurringRulesEmpty || typeof document === "undefined") return;
+  const sortedRules = sortRecurringRules(state.recurringRules);
+  if (sortedRules.length === 0) {
+    dom.recurringRulesList.replaceChildren();
+    dom.recurringRulesEmpty.style.display = "block";
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const rule of sortedRules) {
+    const nextDueDate = getNextRecurringDueDateForRule(rule);
+    const article = document.createElement("article");
+    article.className = `recurring-rule-item${rule.active ? "" : " is-paused"}`;
+    article.dataset.ruleId = rule.id;
+    article.innerHTML = `
+      <div class="recurring-rule-head">
+        <div>
+          <p class="recurring-rule-title"></p>
+          <p class="recurring-rule-meta"></p>
+        </div>
+        <span class="record-badge recurring-rule-badge"></span>
+      </div>
+      <p class="recurring-rule-note"></p>
+      <div class="recurring-rule-actions">
+        <button type="button" data-action="edit" class="ghost-btn tiny">Sửa</button>
+        <button type="button" data-action="toggle" class="ghost-btn tiny"></button>
+        <button type="button" data-action="delete" class="danger-btn tiny">Xóa</button>
+      </div>
+    `;
+    article.querySelector(".recurring-rule-title").textContent = `${rule.category} · ${formatCurrencyForUI(rule.amount)}`;
+    article.querySelector(".recurring-rule-meta").textContent = rule.active
+      ? `Mỗi tháng ngày ${rule.dayOfMonth}. Bắt đầu ${formatDate(rule.startDate)}${nextDueDate ? `. Kỳ tiếp theo ${formatDate(nextDueDate)}.` : "."}`
+      : `Đang tạm dừng. Bắt đầu ${formatDate(rule.startDate)}.`;
+    article.querySelector(".recurring-rule-note").textContent = rule.note || "Không có ghi chú.";
+    article.querySelector(".recurring-rule-badge").textContent = rule.active ? "Đang bật" : "Tạm dừng";
+    article.querySelector('[data-action="toggle"]').textContent = rule.active ? "Tạm dừng" : "Bật lại";
+    fragment.appendChild(article);
+  }
+  dom.recurringRulesList.replaceChildren(fragment);
+  dom.recurringRulesEmpty.style.display = "none";
 }
 
 function setFormStatus(message, type = "info") {
@@ -803,13 +1256,87 @@ function applySettingsToUI() {
   applyAmountVisibility();
   applyDailyReminderToggleState();
   applyAutoSyncToggleState();
+  resetRecurringRuleForm();
+  renderRecurringRules();
+}
+
+function getRecordsDerivedData() {
+  ensureRuntimeCaches();
+  if (state.runtime.recordsDerivedCache && state.runtime.recordsDerivedCacheVersion === state.runtime.recordsVersion) {
+    return state.runtime.recordsDerivedCache;
+  }
+
+  const recordsById = new Map();
+  const recurringRecordByKey = new Map();
+  const dateTotals = new Map();
+  const summaryByMonth = new Map();
+  const usedCategories = new Set();
+  let grandTotal = 0;
+
+  for (const record of state.records) {
+    const recordId = String(record?.id || "").trim();
+    if (recordId) recordsById.set(recordId, record);
+
+    const category = normalizeCategoryName(record?.category, "Khác");
+    if (category) usedCategories.add(category);
+
+    if (record?.source === RECORD_SOURCE.recurring) {
+      const lookupKey = makeRecurringLookupKey(record.recurringRuleId, record.recurringOccurrenceKey);
+      if (lookupKey) recurringRecordByKey.set(lookupKey, record);
+    }
+
+    const amount = Number(record?.amount) || 0;
+    const dateKey = normalizeDateKey(record?.date, record?.createdAt);
+    const monthKey = getMonthKeyFromDate(dateKey);
+    if (amount <= 0 || !dateKey || !monthKey) continue;
+
+    grandTotal += amount;
+    dateTotals.set(dateKey, (dateTotals.get(dateKey) || 0) + amount);
+
+    if (!summaryByMonth.has(monthKey)) summaryByMonth.set(monthKey, { total: 0, count: 0, categories: new Map() });
+    const monthSummary = summaryByMonth.get(monthKey);
+    monthSummary.total += amount;
+    monthSummary.count += 1;
+    if (!monthSummary.categories.has(category)) monthSummary.categories.set(category, { amount: 0, count: 0 });
+    const categorySummary = monthSummary.categories.get(category);
+    categorySummary.amount += amount;
+    categorySummary.count += 1;
+  }
+
+  const months = Array.from(summaryByMonth.entries())
+    .map(([monthKey, monthSummary]) => ({
+      monthKey,
+      total: monthSummary.total,
+      count: monthSummary.count,
+      categories: Array.from(monthSummary.categories.entries())
+        .map(([category, summary]) => ({ category, amount: summary.amount, count: summary.count }))
+        .sort((a, b) => (b.amount - a.amount) || (b.count - a.count) || a.category.localeCompare(b.category, "vi")),
+    }))
+    .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+
+  const derived = {
+    recordsById,
+    recurringRecordByKey,
+    dateTotals,
+    monthSummaries: summaryByMonth,
+    availableRecordCategories: Array.from(usedCategories).sort((a, b) => a.localeCompare(b, "vi")),
+    summary: {
+      grandTotal,
+      monthCount: months.length,
+      months,
+    },
+  };
+
+  state.runtime.recordsDerivedCache = derived;
+  state.runtime.recordsDerivedCacheVersion = state.runtime.recordsVersion;
+  return derived;
 }
 
 function getBudgetStatusForCurrentMonth() {
   const budget = Number(state.settings.monthlyBudget) || 0;
   if (budget <= 0) return { isOverBudget: false, overBy: 0, remaining: 0 };
   const month = getLocalMonthKey();
-  const monthTotal = state.records.reduce((sum, record) => sum + (String(record.date).startsWith(month) ? Number(record.amount) || 0 : 0), 0);
+  const monthTotal = getRecordsDerivedData().monthSummaries.get(month)?.total || 0;
   const diff = budget - monthTotal;
   return { isOverBudget: diff < 0, overBy: diff < 0 ? Math.abs(diff) : 0, remaining: diff > 0 ? diff : 0 };
 }
@@ -817,15 +1344,11 @@ function getBudgetStatusForCurrentMonth() {
 function getStatsSnapshot(todayKey, monthKey) {
   const today = normalizeDateKey(todayKey);
   const month = normalizeMonthFilter(monthKey);
-  let todayTotal = 0;
-  let monthTotal = 0;
-  for (const record of state.records) {
-    const amount = Number(record.amount) || 0;
-    if (amount <= 0) continue;
-    if (normalizeDateKey(record.date) === today) todayTotal += amount;
-    if (month && String(record.date).startsWith(month)) monthTotal += amount;
-  }
-  return { todayTotal, monthTotal };
+  const derived = getRecordsDerivedData();
+  return {
+    todayTotal: derived.dateTotals.get(today) || 0,
+    monthTotal: month ? derived.monthSummaries.get(month)?.total || 0 : 0,
+  };
 }
 
 function renderStats() {
@@ -859,41 +1382,7 @@ function renderStats() {
 }
 
 function getCategorySummaryData() {
-  ensureRuntimeCaches();
-  if (state.runtime.categorySummaryCache && state.runtime.categorySummaryCacheVersion === state.runtime.recordsVersion) {
-    return state.runtime.categorySummaryCache;
-  }
-  const summaryByMonth = new Map();
-  let grandTotal = 0;
-  for (const record of state.records) {
-    const amount = Number(record.amount) || 0;
-    const monthKey = getMonthKeyFromDate(record.date);
-    const category = normalizeCategoryName(record.category, "Khác");
-    if (amount <= 0 || !monthKey) continue;
-    grandTotal += amount;
-    if (!summaryByMonth.has(monthKey)) summaryByMonth.set(monthKey, { total: 0, count: 0, categories: new Map() });
-    const monthSummary = summaryByMonth.get(monthKey);
-    monthSummary.total += amount;
-    monthSummary.count += 1;
-    if (!monthSummary.categories.has(category)) monthSummary.categories.set(category, { amount: 0, count: 0 });
-    const categorySummary = monthSummary.categories.get(category);
-    categorySummary.amount += amount;
-    categorySummary.count += 1;
-  }
-  const months = Array.from(summaryByMonth.entries())
-    .map(([monthKey, monthSummary]) => ({
-      monthKey,
-      total: monthSummary.total,
-      count: monthSummary.count,
-      categories: Array.from(monthSummary.categories.entries())
-        .map(([category, summary]) => ({ category, amount: summary.amount, count: summary.count }))
-        .sort((a, b) => (b.amount - a.amount) || (b.count - a.count) || a.category.localeCompare(b.category, "vi")),
-    }))
-    .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
-  const summaryResult = { grandTotal, monthCount: months.length, months };
-  state.runtime.categorySummaryCache = summaryResult;
-  state.runtime.categorySummaryCacheVersion = state.runtime.recordsVersion;
-  return summaryResult;
+  return getRecordsDerivedData().summary;
 }
 
 function renderMonthlyCategorySummary() {
@@ -931,15 +1420,17 @@ function renderMonthlyCategorySummary() {
   dom.monthlySummaryEmpty.style.display = items.length > 0 ? "none" : "block";
 }
 
+function compareRecordsByUpdatedAt(a, b) {
+  const aTime = Date.parse(a.updatedAt || a.createdAt || `${a.date}T00:00:00`) || 0;
+  const bTime = Date.parse(b.updatedAt || b.createdAt || `${b.date}T00:00:00`) || 0;
+  return bTime - aTime || String(b.id || "").localeCompare(String(a.id || ""));
+}
+
 function getSortedRecordsByDate(records) {
   ensureRuntimeCaches();
   const source = Array.isArray(records) ? records : [];
   if (source === state.records && state.runtime.sortedRecordsVersion === state.runtime.recordsVersion) return state.runtime.sortedRecordsCache;
-  const sorted = [...source].sort((a, b) => {
-    const aTime = Date.parse(a.updatedAt || a.createdAt || `${a.date}T00:00:00`) || 0;
-    const bTime = Date.parse(b.updatedAt || b.createdAt || `${b.date}T00:00:00`) || 0;
-    return bTime - aTime || String(b.id || "").localeCompare(String(a.id || ""));
-  });
+  const sorted = [...source].sort(compareRecordsByUpdatedAt);
   if (source === state.records) {
     state.runtime.sortedRecordsCache = sorted;
     state.runtime.sortedRecordsVersion = state.runtime.recordsVersion;
@@ -967,6 +1458,7 @@ function getRecordSearchText(record) {
     record.category,
     record.method,
     record.note,
+    record.source === RECORD_SOURCE.recurring ? "Định kỳ recurring" : "",
     String(amount),
     formatCurrency(amount),
   ].join(" "));
@@ -974,18 +1466,33 @@ function getRecordSearchText(record) {
   return text;
 }
 
+function getNormalizedRecordsFilterQuery() {
+  ensureRuntimeCaches();
+  return normalizeTextLoose(state.runtime.recordsFilter?.query);
+}
+
 function getFilteredRecords(records) {
   ensureRuntimeCaches();
   const source = Array.isArray(records) ? records : [];
-  const filters = state.runtime.recordsFilter || {};
-  const normalizedQuery = normalizeTextLoose(filters.query);
+  const normalizedQuery = getNormalizedRecordsFilterQuery();
   if (!normalizedQuery) return source;
-  return source.filter((record) => getRecordSearchText(record).includes(normalizedQuery));
+  const canUseCache =
+    source === state.runtime.sortedRecordsCache &&
+    state.runtime.filteredRecordsVersion === state.runtime.recordsVersion &&
+    state.runtime.filteredRecordsQuery === normalizedQuery;
+  if (canUseCache) return state.runtime.filteredRecordsCache;
+
+  const filtered = source.filter((record) => getRecordSearchText(record).includes(normalizedQuery));
+  if (source === state.runtime.sortedRecordsCache) {
+    state.runtime.filteredRecordsCache = filtered;
+    state.runtime.filteredRecordsVersion = state.runtime.recordsVersion;
+    state.runtime.filteredRecordsQuery = normalizedQuery;
+  }
+  return filtered;
 }
 
 function hasActiveRecordsFilter() {
-  const filters = state.runtime.recordsFilter || {};
-  return Boolean(normalizeTextLoose(filters.query));
+  return Boolean(getNormalizedRecordsFilterQuery());
 }
 
 function createRecordRow(record) {
@@ -1001,7 +1508,20 @@ function createRecordRow(record) {
   }
   row.dataset.recordId = record.id;
   row.querySelector('[data-col="date"]').textContent = formatDate(record.date);
-  row.querySelector('[data-col="category"]').textContent = record.category;
+  const categoryCell = row.querySelector('[data-col="category"]');
+  if (categoryCell) {
+    categoryCell.classList.add("record-category-cell");
+    categoryCell.textContent = "";
+    const categoryText = document.createElement("span");
+    categoryText.textContent = record.category;
+    categoryCell.appendChild(categoryText);
+    if (record.source === RECORD_SOURCE.recurring) {
+      const badge = document.createElement("span");
+      badge.className = "record-badge";
+      badge.textContent = "Định kỳ";
+      categoryCell.appendChild(badge);
+    }
+  }
   row.querySelector('[data-col="amount"]').textContent = formatCurrencyForUI(record.amount);
   row.querySelector('[data-col="method"]').textContent = record.method;
   row.querySelector('[data-col="note"]').textContent = record.note || "-";
@@ -1057,6 +1577,7 @@ function render() {
   clearPendingFilterInputRender();
   renderStats();
   renderMonthlyCategorySummary();
+  renderRecurringRules();
   renderRecords();
 }
 function onToggleTheme() {
@@ -1138,6 +1659,111 @@ function onSaveSettings() {
   setFormStatus("Đã lưu cài đặt.", "success");
 }
 
+function onSubmitRecurringRule(event) {
+  event.preventDefault();
+  const recurringRuleId = String(dom.recurringRuleIdInput?.value || "").trim();
+  const existingRule = findRecurringRuleById(recurringRuleId);
+  const amount = Number(dom.recurringRuleAmountInput?.value || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    setFormStatus("Vui lòng nhập số tiền định kỳ hợp lệ.", "error");
+    return;
+  }
+  const startDate = normalizeDateKey(dom.recurringRuleStartDateInput?.value || getLocalDateKey());
+  const timestamp = new Date().toISOString();
+  const normalizedRule = normalizeRecurringRule({
+    id: existingRule?.id || makeRecurringRuleId(),
+    amount,
+    category: normalizeCategoryValue(String(dom.recurringRuleCategoryInput?.value || "Khác")),
+    method: normalizeMethodValue(String(dom.recurringRuleMethodInput?.value || "Tiền mặt")),
+    note: String(dom.recurringRuleNoteInput?.value || "").trim(),
+    dayOfMonth: dom.recurringRuleDayInput?.value || new Date(startDate).getDate(),
+    startDate,
+    active: Boolean(dom.recurringRuleActiveInput?.checked),
+    createdAt: existingRule?.createdAt || timestamp,
+    updatedAt: timestamp,
+  });
+  if (!normalizedRule) {
+    setFormStatus("Không thể lưu khoản định kỳ.", "error");
+    return;
+  }
+
+  if (existingRule) {
+    state.recurringRules = state.recurringRules.map((rule) => rule.id === normalizedRule.id ? normalizedRule : rule);
+  } else {
+    state.recurringRules = [normalizedRule, ...state.recurringRules];
+  }
+  persistRecurringState();
+  const generatedCount = normalizedRule.active ? generateRecurringRecords() : 0;
+  refreshCategoryOptionsFromSettings();
+  resetRecurringRuleForm();
+  render();
+  setFormStatus(
+    existingRule
+      ? generatedCount > 0
+        ? `Đã cập nhật khoản định kỳ và tạo ${generatedCount} giao dịch còn thiếu.`
+        : "Đã cập nhật khoản định kỳ."
+      : generatedCount > 0
+        ? `Đã lưu khoản định kỳ và tạo ${generatedCount} giao dịch còn thiếu.`
+        : "Đã lưu khoản định kỳ.",
+    "success"
+  );
+}
+
+function onCancelRecurringRuleEdit() {
+  resetRecurringRuleForm();
+}
+
+function onRecurringRulesListClick(event) {
+  const target = event.target;
+  if (!target || typeof target.closest !== "function") return;
+  const button = target.closest("button");
+  const item = target.closest(".recurring-rule-item");
+  const ruleId = item?.dataset?.ruleId;
+  if (!button || !ruleId) return;
+  const rule = findRecurringRuleById(ruleId);
+  if (!rule) return;
+
+  if (button.dataset.action === "edit") {
+    populateRecurringRuleForm(ruleId);
+    if (dom.recurringRuleAmountInput && typeof dom.recurringRuleAmountInput.focus === "function") {
+      dom.recurringRuleAmountInput.focus();
+    }
+    return;
+  }
+
+  if (button.dataset.action === "toggle") {
+    const updatedRule = normalizeRecurringRule({
+      ...rule,
+      active: !rule.active,
+      updatedAt: new Date().toISOString(),
+    });
+    state.recurringRules = state.recurringRules.map((entry) => entry.id === updatedRule.id ? updatedRule : entry);
+    persistRecurringState();
+    const generatedCount = updatedRule.active ? generateRecurringRecords() : 0;
+    refreshCategoryOptionsFromSettings();
+    render();
+    setFormStatus(
+      updatedRule.active
+        ? generatedCount > 0
+          ? `Đã bật lại khoản định kỳ và tạo ${generatedCount} giao dịch còn thiếu.`
+          : "Đã bật lại khoản định kỳ."
+        : "Đã tạm dừng khoản định kỳ.",
+      "success"
+    );
+    return;
+  }
+
+  if (button.dataset.action === "delete") {
+    if (typeof window !== "undefined" && typeof window.confirm === "function" && !window.confirm("Xóa khoản chi định kỳ này?")) return;
+    state.recurringRules = state.recurringRules.filter((entry) => entry.id !== ruleId);
+    removeRecurringSuppressionsForRule(ruleId);
+    if (String(dom.recurringRuleIdInput?.value || "").trim() === ruleId) resetRecurringRuleForm();
+    persistRecurringState();
+    render();
+    setFormStatus("Đã xóa khoản định kỳ.", "success");
+  }
+}
+
 async function onToggleDailyReminder() {
   const bridge = getAndroidReminderBridge();
   if (!bridge || typeof bridge.scheduleDailyReminder !== "function" || typeof bridge.cancelDailyReminder !== "function") {
@@ -1213,6 +1839,12 @@ function onClearAllRecords() {
 }
 
 function doClearAllRecords() {
+  for (const rule of state.recurringRules) {
+    const scheduledMonths = getRecurringDueMonthKeys({ ...rule, active: true }, getLocalDateKey());
+    for (const monthKey of scheduledMonths) {
+      addRecurringSuppression(rule.id, makeRecurringOccurrenceKey(rule.id, monthKey));
+    }
+  }
   state.records = [];
   markRecordsDirty();
   persistRecords();
@@ -1263,7 +1895,7 @@ function onSubmitExpense(event) {
 
 function findRecordById(recordId) {
   const id = String(recordId || "").trim();
-  return id ? state.records.find((record) => String(record.id) === id) || null : null;
+  return id ? getRecordsDerivedData().recordsById.get(id) || null : null;
 }
 
 function confirmDeleteRecord(recordId) {
@@ -1279,6 +1911,10 @@ function confirmDeleteRecord(recordId) {
 
 function doDeleteRecord(id) {
   if (!id) return;
+  const record = findRecordById(id);
+  if (record && record.source === RECORD_SOURCE.recurring && record.recurringRuleId && record.recurringOccurrenceKey) {
+    addRecurringSuppression(record.recurringRuleId, record.recurringOccurrenceKey);
+  }
   state.records = state.records.filter((record) => String(record.id) !== id);
   markRecordsDirty();
   persistRecords();
@@ -1488,6 +2124,9 @@ function attachEvents() {
     document.addEventListener("keydown", onSettingsPanelKeydown);
   }
   if (dom.saveSettingsBtn) dom.saveSettingsBtn.addEventListener("click", onSaveSettings);
+  if (dom.recurringRuleForm) dom.recurringRuleForm.addEventListener("submit", onSubmitRecurringRule);
+  if (dom.recurringRuleCancelBtn) dom.recurringRuleCancelBtn.addEventListener("click", onCancelRecurringRuleEdit);
+  if (dom.recurringRulesList) dom.recurringRulesList.addEventListener("click", onRecurringRulesListClick);
   if (dom.toggleDailyReminderBtn) dom.toggleDailyReminderBtn.addEventListener("click", () => void onToggleDailyReminder());
   if (dom.toggleAutoSyncBtn) dom.toggleAutoSyncBtn.addEventListener("click", () => void onToggleAutoSync());
   if (dom.autoSyncIntervalSelect) dom.autoSyncIntervalSelect.addEventListener("change", onAutoSyncIntervalChange);
@@ -1534,6 +2173,7 @@ function init() {
   if (!HAS_DOCUMENT) return;
   ensureRuntimeCaches();
   loadStateFromStorage();
+  generateRecurringRecords();
   refreshCategoryOptionsFromSettings();
   applySettingsToUI();
   setSettingsPanelOpen(false);

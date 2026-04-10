@@ -10,6 +10,7 @@ const THEMES = { light: "light", dark: "dark" };
 const RECORD_SOURCE = { manual: "manual", recurring: "recurring" };
 const MAX_RECORDS = 8000;
 const MAX_RECORDS_PER_PAGE = 50;
+const PERFORMANCE_LITE_RECORDS_PER_PAGE = 30;
 const RECORDS_FILTER_INPUT_DEBOUNCE_MS = 120;
 const SYNC_MAX_RETRIES = 3;
 const SYNC_RETRY_DELAY_MS = 1000;
@@ -68,6 +69,10 @@ const state = {
     recurringSuppressionCache: new Set(),
     recurringSuppressionCacheVersion: -1,
     recurringSuppressionsVersion: 0,
+    statsRenderKey: "",
+    monthlySummaryRenderKey: "",
+    recurringRulesRenderKey: "",
+    recordsRenderKey: "",
     pendingRecordsRenderHandle: null,
     recordsFilterInputHandle: null,
     currentPage: 1,
@@ -792,6 +797,10 @@ function ensureRuntimeCaches() {
   if (!(state.runtime.recurringSuppressionCache instanceof Set)) state.runtime.recurringSuppressionCache = new Set();
   if (!Number.isFinite(state.runtime.recurringSuppressionCacheVersion)) state.runtime.recurringSuppressionCacheVersion = -1;
   if (!Number.isFinite(state.runtime.recurringSuppressionsVersion)) state.runtime.recurringSuppressionsVersion = 0;
+  if (typeof state.runtime.statsRenderKey !== "string") state.runtime.statsRenderKey = "";
+  if (typeof state.runtime.monthlySummaryRenderKey !== "string") state.runtime.monthlySummaryRenderKey = "";
+  if (typeof state.runtime.recurringRulesRenderKey !== "string") state.runtime.recurringRulesRenderKey = "";
+  if (typeof state.runtime.recordsRenderKey !== "string") state.runtime.recordsRenderKey = "";
   if (state.runtime.pendingRecordsRenderHandle === undefined) state.runtime.pendingRecordsRenderHandle = null;
   if (state.runtime.recordsFilterInputHandle === undefined) state.runtime.recordsFilterInputHandle = null;
   if (!Number.isFinite(state.runtime.currentPage) || state.runtime.currentPage < 1) state.runtime.currentPage = 1;
@@ -1053,6 +1062,18 @@ function normalizeMethodValue(value) {
   return trimmed.slice(0, 40);
 }
 
+function isPerformanceLiteActive() {
+  if (typeof document !== "undefined") {
+    if (document.documentElement?.classList?.contains("performance-lite")) return true;
+    if (document.body?.classList?.contains("performance-lite")) return true;
+  }
+  return getRuntimeUiProfile().prefersPerformanceLite;
+}
+
+function getRecordsPerPage() {
+  return isPerformanceLiteActive() ? PERFORMANCE_LITE_RECORDS_PER_PAGE : MAX_RECORDS_PER_PAGE;
+}
+
 function findRecurringRuleById(ruleId) {
   const id = String(ruleId || "").trim();
   return id ? state.recurringRules.find((rule) => rule.id === id) || null : null;
@@ -1115,9 +1136,28 @@ function populateRecurringRuleForm(ruleId) {
   if (dom.recurringRuleCancelBtn) dom.recurringRuleCancelBtn.classList.remove("hidden");
 }
 
-function renderRecurringRules() {
+function renderRecurringRules(force = false) {
   if (!dom.recurringRulesList || !dom.recurringRulesEmpty || typeof document === "undefined") return;
+  if (!force && !isSettingsPanelOpen()) return;
   const sortedRules = sortRecurringRules(state.recurringRules);
+  const renderKey = [
+    shouldHideAmounts() ? 1 : 0,
+    sortedRules.length,
+    ...sortedRules.map((rule) =>
+      [
+        rule.id,
+        rule.updatedAt,
+        rule.active ? 1 : 0,
+        rule.amount,
+        rule.dayOfMonth,
+        rule.category,
+        rule.method,
+        rule.note,
+      ].join("~")
+    ),
+  ].join("|");
+  if (!force && state.runtime.recurringRulesRenderKey === renderKey) return;
+  state.runtime.recurringRulesRenderKey = renderKey;
   if (sortedRules.length === 0) {
     dom.recurringRulesList.replaceChildren();
     dom.recurringRulesEmpty.style.display = "block";
@@ -1353,6 +1393,15 @@ function getStatsSnapshot(todayKey, monthKey) {
 
 function renderStats() {
   if (!dom.statToday || !dom.statMonth || !dom.statCount || !dom.statBudget || !dom.budgetWarning) return;
+  const renderKey = [
+    state.runtime.recordsVersion,
+    getLocalDateKey(),
+    getLocalMonthKey(),
+    Number(state.settings.monthlyBudget) || 0,
+    shouldHideAmounts() ? 1 : 0,
+  ].join("|");
+  if (state.runtime.statsRenderKey === renderKey) return;
+  state.runtime.statsRenderKey = renderKey;
   const stats = getStatsSnapshot(getLocalDateKey(), getLocalMonthKey());
   dom.statToday.textContent = formatCurrencyForUI(stats.todayTotal);
   dom.statMonth.textContent = formatCurrencyForUI(stats.monthTotal);
@@ -1389,6 +1438,9 @@ function renderMonthlyCategorySummary() {
   if (!dom.monthlySummaryList || !dom.monthlySummaryTotal || !dom.monthlySummaryEmpty) return;
   const summaryData = getCategorySummaryData();
   if (summaryData.monthCount === 0) {
+    const emptyKey = `${state.runtime.recordsVersion}|empty|${shouldHideAmounts() ? 1 : 0}`;
+    if (state.runtime.monthlySummaryRenderKey === emptyKey) return;
+    state.runtime.monthlySummaryRenderKey = emptyKey;
     dom.monthlySummaryList.replaceChildren();
     dom.monthlySummaryTotal.textContent = "Chưa có dữ liệu.";
     dom.monthlySummaryEmpty.style.display = "block";
@@ -1397,6 +1449,18 @@ function renderMonthlyCategorySummary() {
   const selected = normalizeMonthFilter(dom.monthlySummaryMonthInput?.value || "");
   const target = summaryData.months.find((item) => item.monthKey === selected) || summaryData.months.find((item) => item.monthKey === getLocalMonthKey()) || summaryData.months[0];
   if (!target) return;
+  const renderKey = [
+    state.runtime.recordsVersion,
+    target.monthKey,
+    shouldHideAmounts() ? 1 : 0,
+  ].join("|");
+  if (state.runtime.monthlySummaryRenderKey === renderKey) {
+    if (dom.monthlySummaryMonthInput && dom.monthlySummaryMonthInput.value !== target.monthKey) {
+      dom.monthlySummaryMonthInput.value = target.monthKey;
+    }
+    return;
+  }
+  state.runtime.monthlySummaryRenderKey = renderKey;
   if (dom.monthlySummaryMonthInput && dom.monthlySummaryMonthInput.value !== target.monthKey) dom.monthlySummaryMonthInput.value = target.monthKey;
   dom.monthlySummaryTotal.textContent = shouldHideAmounts()
     ? `Tháng ${formatMonthKey(target.monthKey)}: ${target.count} giao dịch`
@@ -1531,12 +1595,23 @@ function createRecordRow(record) {
 function renderRecords(force = false) {
   if (!dom.recordsBody || !dom.emptyState) return;
   if (!force && isRecordsContentCollapsed()) return;
+  const recordsPerPage = getRecordsPerPage();
   const filtered = getFilteredRecords(getSortedRecordsByDate(state.records));
-  const totalPages = Math.ceil(filtered.length / MAX_RECORDS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / recordsPerPage));
   if (state.runtime.currentPage > totalPages) state.runtime.currentPage = 1;
+  const renderKey = [
+    state.runtime.recordsVersion,
+    getNormalizedRecordsFilterQuery(),
+    state.runtime.currentPage,
+    filtered.length,
+    shouldHideAmounts() ? 1 : 0,
+    recordsPerPage,
+  ].join("|");
+  if (!force && state.runtime.recordsRenderKey === renderKey) return;
+  state.runtime.recordsRenderKey = renderKey;
   if (dom.recordsFilterSummary) {
-    const showing = filtered.length > MAX_RECORDS_PER_PAGE
-      ? `${(state.runtime.currentPage - 1) * MAX_RECORDS_PER_PAGE + 1}-${Math.min(state.runtime.currentPage * MAX_RECORDS_PER_PAGE, filtered.length)}`
+    const showing = filtered.length > recordsPerPage
+      ? `${(state.runtime.currentPage - 1) * recordsPerPage + 1}-${Math.min(state.runtime.currentPage * recordsPerPage, filtered.length)}`
       : filtered.length;
     dom.recordsFilterSummary.textContent = hasActiveRecordsFilter()
       ? `Hiển thị ${showing}/${filtered.length} giao dịch.`
@@ -1549,8 +1624,8 @@ function renderRecords(force = false) {
     return;
   }
   dom.emptyState.style.display = "none";
-  const startIndex = (state.runtime.currentPage - 1) * MAX_RECORDS_PER_PAGE;
-  const endIndex = Math.min(startIndex + MAX_RECORDS_PER_PAGE, filtered.length);
+  const startIndex = (state.runtime.currentPage - 1) * recordsPerPage;
+  const endIndex = Math.min(startIndex + recordsPerPage, filtered.length);
   const pageRecords = filtered.slice(startIndex, endIndex);
   const fragment = document.createDocumentFragment();
   for (const record of pageRecords) {
@@ -1559,7 +1634,7 @@ function renderRecords(force = false) {
   }
   dom.recordsBody.replaceChildren(fragment);
   if (dom.paginationControls) {
-    dom.paginationControls.style.display = filtered.length > MAX_RECORDS_PER_PAGE ? "flex" : "none";
+    dom.paginationControls.style.display = filtered.length > recordsPerPage ? "flex" : "none";
   }
   if (dom.paginationInfo) {
     dom.paginationInfo.textContent = `Trang ${state.runtime.currentPage}/${totalPages}`;
@@ -1604,6 +1679,7 @@ function setSettingsPanelOpen(open, options = {}) {
   if (typeof document !== "undefined" && document.body) document.body.classList.toggle("settings-open", nextOpen);
   applySettingsToggleState({ flash: Boolean(options.flash) });
   if (!nextOpen) return;
+  renderRecurringRules(true);
   setTimeout(() => {
     if (dom.monthlyBudgetInput && typeof dom.monthlyBudgetInput.focus === "function") {
       dom.monthlyBudgetInput.focus();
@@ -2100,7 +2176,7 @@ function onPaginationPrev() {
 }
 
 function onPaginationNext(filteredLength) {
-  const totalPages = Math.ceil(filteredLength / MAX_RECORDS_PER_PAGE);
+  const totalPages = Math.ceil(filteredLength / getRecordsPerPage());
   if (state.runtime.currentPage < totalPages) {
     state.runtime.currentPage += 1;
     renderRecords(true);

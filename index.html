@@ -95,6 +95,21 @@
       </section>
       <p id="budget-warning" class="budget-warning hidden" role="status" aria-live="polite"></p>
 
+      <!-- Wallet Dashboard Section -->
+      <section class="panel wallet-dashboard" aria-label="Quản lý ví">
+        <div class="panel-heading">
+          <div>
+            <h3>Danh sách ví</h3>
+            <p class="hint">Số dư hiện tại của từng ví</p>
+          </div>
+          <div class="wallet-actions">
+            <button id="wallet-transfer-btn" type="button" class="ghost-btn tiny">Chuyển tiền</button>
+            <button id="wallet-add-btn" type="button" class="primary-btn tiny">+ Thêm ví</button>
+          </div>
+        </div>
+        <div id="wallets-grid" class="wallets-grid"></div>
+      </section>
+
       <section class="panel" aria-label="Tổng kết danh mục theo tháng">
         <div class="panel-heading">
           <div>
@@ -185,10 +200,7 @@
             <div class="field-grid">
               <label for="recurring-rule-method">Thanh toán</label>
               <select id="recurring-rule-method" required>
-                <option value="Tiền mặt">Tiền mặt</option>
-                <option value="Chuyển khoản">Chuyển khoản</option>
-                <option value="Thẻ tín dụng">Thẻ tín dụng</option>
-                <option value="Ví điện tử">Ví điện tử</option>
+                <!-- Các tùy chọn sẽ được điền động từ danh sách ví -->
               </select>
             </div>
             <div class="field-grid">
@@ -215,6 +227,21 @@
           <div id="recurring-rules-list" class="recurring-rules-list"></div>
           <p id="recurring-rules-empty" class="empty-state">Chưa có khoản chi định kỳ nào.</p>
         </section>
+
+        <!-- Wallet Management Section -->
+        <section class="wallet-management-section" aria-labelledby="wallet-management-title">
+          <div class="panel-heading panel-heading-tight">
+            <div>
+              <h4 id="wallet-management-title">Quản lý ví</h4>
+              <p class="hint">Đặt số dư ban đầu cho từng ví</p>
+            </div>
+          </div>
+          <div id="wallet-balance-list" class="wallet-balance-list"></div>
+          <div class="wallet-balance-actions">
+            <button id="save-wallet-balances" type="button" class="primary-btn">Lưu số dư ví</button>
+          </div>
+        </section>
+
         <p class="hint">
           Chỉ cần nhập URL khi bạn muốn đồng bộ lên Google Sheet. Link cập nhật:
           <a
@@ -255,10 +282,7 @@
           <div class="field-grid">
             <label for="expense-method">Thanh toán</label>
             <select id="expense-method" name="method" required>
-              <option value="Tiền mặt">Tiền mặt</option>
-              <option value="Chuyển khoản">Chuyển khoản</option>
-              <option value="Thẻ tín dụng">Thẻ tín dụng</option>
-              <option value="Ví điện tử">Ví điện tử</option>
+              <!-- Các tùy chọn sẽ được điền động từ danh sách ví -->
             </select>
           </div>
           <div class="field-grid span-2">
@@ -374,10 +398,7 @@
           <div class="field-grid">
             <label for="edit-expense-method">Thanh toán</label>
             <select id="edit-expense-method" required>
-              <option value="Tiền mặt">Tiền mặt</option>
-              <option value="Chuyển khoản">Chuyển khoản</option>
-              <option value="Thẻ tín dụng">Thẻ tín dụng</option>
-              <option value="Ví điện tử">Ví điện tử</option>
+              <!-- Các tùy chọn sẽ được điền động từ danh sách ví -->
             </select>
           </div>
           <div class="field-grid span-2">
@@ -421,6 +442,56 @@
         <div class="settings-actions">
           <button type="submit" class="danger-btn">Xóa tất cả</button>
           <button type="button" id="clear-all-confirm-cancel" class="ghost-btn">Hủy</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Transfer Dialog -->
+    <dialog id="transfer-dialog" class="confirm-dialog">
+      <form id="transfer-form" method="dialog" class="confirm-dialog-content">
+        <h3>Chuyển tiền giữa các ví</h3>
+        <div class="form-grid">
+          <div class="field-grid">
+            <label for="transfer-from">Từ ví</label>
+            <select id="transfer-from" required></select>
+          </div>
+          <div class="field-grid">
+            <label for="transfer-to">Sang ví</label>
+            <select id="transfer-to" required></select>
+          </div>
+          <div class="field-grid">
+            <label for="transfer-amount">Số tiền (VND)</label>
+            <input id="transfer-amount" type="number" min="1000" step="1000" required />
+          </div>
+          <div class="field-grid span-2">
+            <label for="transfer-note">Ghi chú (tuỳ chọn)</label>
+            <input id="transfer-note" type="text" maxlength="120" placeholder="Ví dụ: Trả tiền nhà" />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button type="button" id="transfer-cancel" class="ghost-btn">Hủy</button>
+          <button type="submit" class="primary-btn">Xác nhận chuyển</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Add Wallet Dialog -->
+    <dialog id="add-wallet-dialog" class="confirm-dialog">
+      <form id="add-wallet-form" method="dialog" class="confirm-dialog-content">
+        <h3>Thêm ví mới</h3>
+        <div class="form-grid">
+          <div class="field-grid">
+            <label for="wallet-name">Tên ví</label>
+            <input id="wallet-name" type="text" maxlength="30" placeholder="Ví dụ: Momo, ZaloPay" required />
+          </div>
+          <div class="field-grid">
+            <label for="wallet-icon">Icon (emoji)</label>
+            <input id="wallet-icon" type="text" maxlength="10" value="👛" />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button type="button" id="add-wallet-cancel" class="ghost-btn">Hủy</button>
+          <button type="submit" class="primary-btn">Thêm ví</button>
         </div>
       </form>
     </dialog>

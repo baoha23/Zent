@@ -4,10 +4,11 @@ const STORAGE_KEYS = {
   settings: "expense_settings_v1",
   recurringRules: "expense_recurring_rules_v1",
   recurringSuppressions: "expense_recurring_suppressions_v1",
+  wallets: "expense_wallets_v1",
 };
 const SYNC_STATUS = { synced: "synced", pending: "pending", failed: "failed", local: "local" };
 const THEMES = { light: "light", dark: "dark" };
-const RECORD_SOURCE = { manual: "manual", recurring: "recurring" };
+const RECORD_SOURCE = { manual: "manual", recurring: "recurring", transfer: "transfer" };
 const MAX_RECORDS = 8000;
 const MAX_RECORDS_PER_PAGE = 50;
 const PERFORMANCE_LITE_RECORDS_PER_PAGE = 30;
@@ -30,6 +31,25 @@ const DAILY_REMINDER_CONFIG = Object.freeze({
   title: "Nhắc nhập chi tiêu",
   message: "Hôm nay bạn chưa nhập chi tiêu. Hãy cập nhật trước khi kết thúc ngày.",
 });
+
+// Cấu hình ví mặc định
+const WALLET_COLORS = [
+  "linear-gradient(140deg, #b2541b 0%, #db7f2e 100%)",
+  "linear-gradient(140deg, #0a7f7a 0%, #44aa92 100%)",
+  "linear-gradient(140deg, #2e8f4d 0%, #66b96d 100%)",
+  "linear-gradient(140deg, #466372 0%, #5a8a8b 100%)",
+  "linear-gradient(140deg, #7c3aed 0%, #a855f7 100%)",
+  "linear-gradient(140deg, #db2777 0%, #f472b6 100%)",
+  "linear-gradient(140deg, #0891b2 0%, #22d3ee 100%)",
+  "linear-gradient(140deg, #65a30d 0%, #a3e635 100%)",
+];
+
+const DEFAULT_WALLETS = [
+  { id: "wallet_tienmat", name: "Tiền mặt", balance: 0, icon: "💵", isDefault: true },
+  { id: "wallet_chuyenkhoan", name: "Chuyển khoản", balance: 0, icon: "🏦", isDefault: true },
+  { id: "wallet_thetindung", name: "Thẻ tín dụng", balance: 0, icon: "💳", isDefault: true },
+  { id: "wallet_vidientu", name: "Ví điện tử", balance: 0, icon: "📱", isDefault: true },
+];
 const NUMBER_FORMATTERS = {
   currency: new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }),
   date: new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" }),
@@ -42,6 +62,7 @@ const state = {
   records: [],
   recurringRules: [],
   recurringSuppressions: [],
+  wallets: [],
   settings: {
     sheetEndpoint: "",
     apiKey: "",
@@ -159,6 +180,13 @@ const dom = HAS_DOCUMENT
       paginationPrevBtn: document.querySelector("#pagination-prev"),
       paginationNextBtn: document.querySelector("#pagination-next"),
       paginationInfo: document.querySelector("#pagination-info"),
+      walletsGrid: document.querySelector("#wallets-grid"),
+      walletTransferBtn: document.querySelector("#wallet-transfer-btn"),
+      walletAddBtn: document.querySelector("#wallet-add-btn"),
+      transferDialog: document.querySelector("#transfer-dialog"),
+      addWalletDialog: document.querySelector("#add-wallet-dialog"),
+      walletBalanceList: document.querySelector("#wallet-balance-list"),
+      saveWalletBalancesBtn: document.querySelector("#save-wallet-balances"),
     }
   : {};
 
@@ -516,6 +544,7 @@ function normalizeRecord(record) {
     ? normalizeRecurringOccurrenceKey(record.recurringOccurrenceKey, recurringRuleId, date)
     : "";
   const hasRecurringIdentity = Boolean(recurringRuleId && recurringOccurrenceKey);
+  const sourceValue = hasRecurringIdentity ? RECORD_SOURCE.recurring : (source === RECORD_SOURCE.transfer ? RECORD_SOURCE.transfer : RECORD_SOURCE.manual);
   return {
     id: String(record.id || makeId()),
     date,
@@ -526,9 +555,10 @@ function normalizeRecord(record) {
     createdAt: normalizeCreatedAt(record.createdAt, date),
     updatedAt: normalizeCreatedAt(record.updatedAt || record.createdAt, date),
     syncStatus: normalizeSyncStatus(record.syncStatus),
-    source: hasRecurringIdentity ? RECORD_SOURCE.recurring : RECORD_SOURCE.manual,
+    source: sourceValue,
     recurringRuleId: hasRecurringIdentity ? recurringRuleId : "",
     recurringOccurrenceKey: hasRecurringIdentity ? recurringOccurrenceKey : "",
+    walletId: String(record.walletId || "").trim() || findWalletIdByName(record.method) || "wallet_tienmat",
   };
 }
 
@@ -874,6 +904,355 @@ function persistRecurringState() {
   safeSetLocalStorage(STORAGE_KEYS.recurringSuppressions, JSON.stringify(state.recurringSuppressions));
 }
 
+// ==================== WALLET FUNCTIONS ====================
+
+function persistWallets() {
+  safeSetLocalStorage(STORAGE_KEYS.wallets, JSON.stringify(state.wallets));
+}
+
+function findWalletById(walletId) {
+  const id = String(walletId || "").trim();
+  return id ? state.wallets.find(w => w.id === id) || null : null;
+}
+
+function findWalletIdByName(name) {
+  const normalizedName = normalizeTextLoose(String(name || ""));
+  for (const wallet of state.wallets) {
+    if (normalizeTextLoose(wallet.name) === normalizedName) {
+      return wallet.id;
+    }
+  }
+  return "";
+}
+
+function getWalletByName(name) {
+  const id = findWalletIdByName(name);
+  return id ? findWalletById(id) : null;
+}
+
+function updateWalletBalance(walletId, amountDelta) {
+  const wallet = findWalletById(walletId);
+  if (!wallet) return false;
+  wallet.balance = Math.max(0, wallet.balance + amountDelta);
+  persistWallets();
+  return true;
+}
+
+function initializeWalletBalances() {
+  // Tính số dư cho mỗi ví từ các bản ghi hiện có
+  const walletBalances = {};
+  for (const wallet of state.wallets) {
+    walletBalances[wallet.id] = 0;
+  }
+
+  for (const record of state.records) {
+    const walletId = record.walletId || findWalletIdByName(record.method);
+    if (walletId && walletBalances[walletId] !== undefined) {
+      if (record.source === RECORD_SOURCE.transfer) {
+        // Transfer không ảnh hưởng đến tổng chi tiêu
+      } else {
+        // Chi tiêu giảm số dư
+        walletBalances[walletId] -= record.amount;
+      }
+    }
+  }
+
+  for (const wallet of state.wallets) {
+    if (walletBalances[wallet.id] !== undefined) {
+      wallet.balance = walletBalances[wallet.id];
+    }
+  }
+  persistWallets();
+}
+
+function renderWallets() {
+  if (!dom.walletsGrid) return;
+  const fragment = document.createDocumentFragment();
+
+  state.wallets.forEach((wallet, index) => {
+    const card = document.createElement("div");
+    card.className = "wallet-card";
+    card.dataset.walletId = wallet.id;
+    card.style.background = WALLET_COLORS[index % WALLET_COLORS.length];
+
+    const displayBalance = shouldHideAmounts()
+      ? "••••••"
+      : formatCurrency(wallet.balance);
+
+    card.innerHTML = `
+      <div class="wallet-card-icon">${wallet.icon || "👛"}</div>
+      <div class="wallet-card-info">
+        <p class="wallet-card-name">${wallet.name}</p>
+        <p class="wallet-card-balance">${displayBalance}</p>
+      </div>
+      ${wallet.isDefault ? '<span class="wallet-default-badge">Mặc định</span>' : ""}
+    `;
+    fragment.appendChild(card);
+  });
+
+  dom.walletsGrid.replaceChildren(fragment);
+}
+
+function refreshWalletMethodOptions() {
+  const walletNames = state.wallets.map(w => w.name);
+
+  // Cập nhật dropdown trong expense form
+  replaceSelectOptions(dom.methodInput, walletNames);
+
+  // Cập nhật dropdown trong edit form
+  replaceSelectOptions(dom.editRecordMethodInput, walletNames);
+
+  // Cập nhật dropdown trong recurring rule form
+  if (dom.recurringRuleMethodInput) {
+    replaceSelectOptions(dom.recurringRuleMethodInput, walletNames);
+  }
+}
+
+// ==================== TRANSFER FUNCTIONS ====================
+
+function populateTransferWalletOptions() {
+  const fromSelect = dom.transferDialog?.querySelector("#transfer-from");
+  const toSelect = dom.transferDialog?.querySelector("#transfer-to");
+  if (!fromSelect || !toSelect) return;
+
+  const options = state.wallets.map(w =>
+    `<option value="${w.id}">${w.icon || "👛"} ${w.name}</option>`
+  ).join("");
+
+  fromSelect.innerHTML = options;
+  toSelect.innerHTML = options;
+
+  // Set defaults
+  if (state.wallets.length >= 2) {
+    fromSelect.value = state.wallets[0]?.id || "";
+    toSelect.value = state.wallets[1]?.id || "";
+  }
+}
+
+function openTransferDialog() {
+  if (!dom.transferDialog || typeof dom.transferDialog.showModal !== "function") {
+    setFormStatus("Thiết bị không hỗ trợ hộp thoại chuyển tiền.", "error");
+    return;
+  }
+  populateTransferWalletOptions();
+  const amountInput = dom.transferDialog.querySelector("#transfer-amount");
+  const noteInput = dom.transferDialog.querySelector("#transfer-note");
+  if (amountInput) amountInput.value = "";
+  if (noteInput) noteInput.value = "";
+  dom.transferDialog.showModal();
+}
+
+function closeTransferDialog() {
+  if (dom.transferDialog && typeof dom.transferDialog.close === "function") {
+    dom.transferDialog.close();
+  }
+}
+
+function onSubmitTransfer(event) {
+  event.preventDefault();
+  const fromSelect = dom.transferDialog.querySelector("#transfer-from");
+  const toSelect = dom.transferDialog.querySelector("#transfer-to");
+  const amountInput = dom.transferDialog.querySelector("#transfer-amount");
+  const noteInput = dom.transferDialog.querySelector("#transfer-note");
+
+  const fromWalletId = fromSelect?.value;
+  const toWalletId = toSelect?.value;
+  const amount = Number(amountInput?.value || 0);
+
+  if (!fromWalletId || !toWalletId) {
+    setFormStatus("Vui lòng chọn ví nguồn và ví đích.", "error");
+    return;
+  }
+  if (fromWalletId === toWalletId) {
+    setFormStatus("Ví nguồn và ví đích phải khác nhau.", "error");
+    return;
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    setFormStatus("Vui lòng nhập số tiền hợp lệ.", "error");
+    return;
+  }
+
+  const fromWallet = findWalletById(fromWalletId);
+  const toWallet = findWalletById(toWalletId);
+  if (!fromWallet || !toWallet) {
+    setFormStatus("Ví không hợp lệ.", "error");
+    return;
+  }
+
+  // Tạo bản ghi chuyển tiền (2 bản ghi: 1 trừ, 1 cộng)
+  const now = new Date().toISOString();
+  const dateKey = getLocalDateKey();
+
+  const recordOut = normalizeRecord({
+    id: makeId(),
+    date: dateKey,
+    category: "Chuyển tiền",
+    amount: amount,
+    method: fromWallet.name,
+    note: `Chuyển sang ${toWallet.name}${noteInput?.value ? " - " + noteInput.value : ""}`,
+    createdAt: now,
+    updatedAt: now,
+    syncStatus: SYNC_STATUS.local,
+    source: RECORD_SOURCE.transfer,
+    walletId: fromWalletId,
+  });
+
+  const recordIn = normalizeRecord({
+    id: makeId(),
+    date: dateKey,
+    category: "Nhận tiền",
+    amount: amount,
+    method: toWallet.name,
+    note: `Nhận từ ${fromWallet.name}${noteInput?.value ? " - " + noteInput.value : ""}`,
+    createdAt: now,
+    updatedAt: now,
+    syncStatus: SYNC_STATUS.local,
+    source: RECORD_SOURCE.transfer,
+    walletId: toWalletId,
+  });
+
+  if (!recordOut || !recordIn) {
+    setFormStatus("Không thể tạo bản ghi chuyển tiền.", "error");
+    return;
+  }
+
+  // Cập nhật số dư
+  updateWalletBalance(fromWalletId, -amount);
+  updateWalletBalance(toWalletId, amount);
+
+  // Thêm bản ghi
+  state.records.unshift(recordOut, recordIn);
+  if (state.records.length > MAX_RECORDS) state.records = state.records.slice(0, MAX_RECORDS);
+
+  markRecordsDirty();
+  persistRecords();
+  closeTransferDialog();
+  renderWallets();
+  render();
+  setFormStatus(`Đã chuyển ${formatCurrency(amount)} từ ${fromWallet.name} sang ${toWallet.name}.`, "success");
+}
+
+// ==================== ADD WALLET FUNCTIONS ====================
+
+function openAddWalletDialog() {
+  if (!dom.addWalletDialog || typeof dom.addWalletDialog.showModal !== "function") {
+    setFormStatus("Thiết bị không hỗ trợ hộp thoại thêm ví.", "error");
+    return;
+  }
+  const nameInput = dom.addWalletDialog.querySelector("#wallet-name");
+  const iconInput = dom.addWalletDialog.querySelector("#wallet-icon");
+  if (nameInput) nameInput.value = "";
+  if (iconInput) iconInput.value = "👛";
+  dom.addWalletDialog.showModal();
+}
+
+function closeAddWalletDialog() {
+  if (dom.addWalletDialog && typeof dom.addWalletDialog.close === "function") {
+    dom.addWalletDialog.close();
+  }
+}
+
+function onSubmitAddWallet(event) {
+  event.preventDefault();
+  const nameInput = dom.addWalletDialog.querySelector("#wallet-name");
+  const iconInput = dom.addWalletDialog.querySelector("#wallet-icon");
+  const name = String(nameInput?.value || "").trim();
+  const icon = String(iconInput?.value || "👛").trim();
+
+  if (!name) {
+    setFormStatus("Vui lòng nhập tên ví.", "error");
+    return;
+  }
+
+  // Kiểm tra trùng tên
+  if (state.wallets.some(w => normalizeTextLoose(w.name) === normalizeTextLoose(name))) {
+    setFormStatus("Tên ví đã tồn tại.", "error");
+    return;
+  }
+
+  const newWallet = {
+    id: `wallet_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+    name,
+    balance: 0,
+    icon,
+    isDefault: false,
+  };
+
+  state.wallets.push(newWallet);
+  persistWallets();
+  refreshWalletMethodOptions();
+  renderWallets();
+  closeAddWalletDialog();
+  setFormStatus(`Đã thêm ví "${name}".`, "success");
+}
+
+// ==================== WALLET BALANCE MANAGEMENT ====================
+
+function renderWalletBalanceInputs() {
+  if (!dom.walletBalanceList) return;
+  const fragment = document.createDocumentFragment();
+
+  state.wallets.forEach((wallet, index) => {
+    const item = document.createElement("div");
+    item.className = "wallet-balance-item";
+    item.innerHTML = `
+      <div class="wallet-balance-info">
+        <span class="wallet-balance-icon">${wallet.icon || "👛"}</span>
+        <span class="wallet-balance-name">${wallet.name}</span>
+      </div>
+      <div class="wallet-balance-input-wrap">
+        <input
+          type="text"
+          class="wallet-balance-input"
+          data-wallet-id="${wallet.id}"
+          value="${formatBudgetInput(wallet.balance)}"
+          placeholder="0"
+          inputmode="numeric"
+        />
+        <span class="wallet-balance-currency">đ</span>
+      </div>
+    `;
+    fragment.appendChild(item);
+  });
+
+  dom.walletBalanceList.replaceChildren(fragment);
+}
+
+function onSaveWalletBalances() {
+  if (!dom.walletBalanceList) return;
+
+  const inputs = dom.walletBalanceList.querySelectorAll(".wallet-balance-input");
+  let changed = false;
+
+  inputs.forEach(input => {
+    const walletId = input.dataset.walletId;
+    const wallet = findWalletById(walletId);
+    if (!wallet) return;
+
+    const newBalance = sanitizeBudgetValue(input.value);
+    if (wallet.balance !== newBalance) {
+      wallet.balance = newBalance;
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    persistWallets();
+    renderWallets();
+    setFormStatus("Đã lưu số dư ví.", "success");
+  } else {
+    setFormStatus("Số dư không thay đổi.", "info");
+  }
+}
+
+function onWalletBalanceInputBlur(event) {
+  const input = event.target;
+  if (!input.classList.contains("wallet-balance-input")) return;
+  input.value = formatBudgetInput(sanitizeBudgetValue(input.value));
+}
+
+// ==================== END WALLET FUNCTIONS ====================
+
 function dedupeRecurringSuppressions(entries) {
   const unique = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -909,6 +1288,17 @@ function loadStateFromStorage() {
     state.recurringSuppressions = raw ? dedupeRecurringSuppressions(JSON.parse(raw)) : [];
   } catch (_error) {
     state.recurringSuppressions = [];
+  }
+  // Khởi tạo ví nếu chưa có
+  try {
+    const raw = safeGetLocalStorage(STORAGE_KEYS.wallets);
+    state.wallets = raw ? JSON.parse(raw) : null;
+  } catch (_error) {
+    state.wallets = null;
+  }
+  if (!state.wallets) {
+    state.wallets = DEFAULT_WALLETS.map(w => ({ ...w }));
+    persistWallets();
   }
   markRecurringSuppressionsDirty();
   markRecordsDirty();
@@ -1653,6 +2043,7 @@ function render() {
   renderStats();
   renderMonthlyCategorySummary();
   renderRecurringRules();
+  renderWalletBalanceInputs();
   renderRecords();
 }
 function onToggleTheme() {
@@ -1942,16 +2333,19 @@ function onSubmitExpense(event) {
     setFormStatus("Vui lòng nhập số tiền hợp lệ.", "error");
     return;
   }
+  const methodValue = normalizeMethodValue(String(formData.get("method") || "Tiền mặt"));
+  const walletId = findWalletIdByName(methodValue) || "wallet_tienmat";
   const record = normalizeRecord({
     id: makeId(),
     date: normalizeDateKey(formData.get("date"), new Date().toISOString()),
     category: normalizeCategoryValue(String(formData.get("category") || "Khác")),
     amount,
-    method: normalizeMethodValue(String(formData.get("method") || "Tiền mặt")),
+    method: methodValue,
     note: String(formData.get("note") || "").trim(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     syncStatus: SYNC_STATUS.local,
+    walletId,
   });
   if (!record) {
     setFormStatus("Không thể lưu giao dịch.", "error");
@@ -1959,11 +2353,17 @@ function onSubmitExpense(event) {
   }
   state.records.unshift(record);
   if (state.records.length > MAX_RECORDS) state.records = state.records.slice(0, MAX_RECORDS);
+
+  // Cập nhật số dư ví khi thêm chi tiêu
+  updateWalletBalance(record.walletId, -record.amount);
+
   markRecordsDirty();
   persistRecords();
   refreshCategoryOptionsFromSettings();
+  refreshWalletMethodOptions();
   if (dom.form && typeof dom.form.reset === "function") dom.form.reset();
   if (dom.dateInput) dom.dateInput.value = getLocalDateKey();
+  renderWallets();
   render();
   const status = getBudgetStatusForCurrentMonth();
   setFormStatus(status.isOverBudget ? `Đã lưu giao dịch. Cảnh báo: vượt ngân sách ${formatCurrency(status.overBy)}.` : "Đã lưu giao dịch.", status.isOverBudget ? "error" : "success");
@@ -1988,12 +2388,19 @@ function confirmDeleteRecord(recordId) {
 function doDeleteRecord(id) {
   if (!id) return;
   const record = findRecordById(id);
-  if (record && record.source === RECORD_SOURCE.recurring && record.recurringRuleId && record.recurringOccurrenceKey) {
-    addRecurringSuppression(record.recurringRuleId, record.recurringOccurrenceKey);
+  if (record) {
+    // Hoàn lại số dư ví khi xóa bản ghi (không tính transfer)
+    if (record.source !== RECORD_SOURCE.transfer) {
+      updateWalletBalance(record.walletId, record.amount);
+    }
+    if (record.source === RECORD_SOURCE.recurring && record.recurringRuleId && record.recurringOccurrenceKey) {
+      addRecurringSuppression(record.recurringRuleId, record.recurringOccurrenceKey);
+    }
   }
   state.records = state.records.filter((record) => String(record.id) !== id);
   markRecordsDirty();
   persistRecords();
+  renderWallets();
   render();
   setFormStatus("Đã xóa giao dịch.", "success");
 }
@@ -2037,6 +2444,19 @@ function onSubmitEditRecord(event) {
     setFormStatus("Số tiền chỉnh sửa không hợp lệ.", "error");
     return;
   }
+
+  // Tính chênh lệch số dư ví nếu amount thay đổi
+  if (record.source !== RECORD_SOURCE.transfer) {
+    const oldAmount = record.amount;
+    const newAmount = Math.round(amount);
+    if (oldAmount !== newAmount) {
+      // Hoàn lại số dư cũ
+      updateWalletBalance(record.walletId, oldAmount);
+      // Trừ số dư mới
+      updateWalletBalance(record.walletId, -newAmount);
+    }
+  }
+
   record.date = normalizeDateKey(dom.editRecordDateInput?.value || record.date, record.createdAt);
   record.category = normalizeCategoryValue(dom.editRecordCategoryInput?.value || record.category);
   record.amount = Math.round(amount);
@@ -2047,6 +2467,7 @@ function onSubmitEditRecord(event) {
   markRecordsDirty();
   persistRecords();
   refreshCategoryOptionsFromSettings();
+  renderWallets();
   render();
   closeEditRecordDialog();
   setFormStatus("Đã cập nhật giao dịch.", "success");
@@ -2081,6 +2502,7 @@ async function postRecordToSheet(record, retryCount = 0) {
           category: record.category,
           amount: record.amount,
           method: record.method,
+          walletId: record.walletId || "",
           note: record.note,
           createdAt: record.createdAt,
           updatedAt: record.updatedAt,
@@ -2243,14 +2665,32 @@ function attachEvents() {
     window.addEventListener("online", updateOnlineStatus);
     window.addEventListener("offline", updateOnlineStatus);
   }
+  // Wallet transfer button
+  if (dom.walletTransferBtn) dom.walletTransferBtn.addEventListener("click", openTransferDialog);
+  if (dom.walletAddBtn) dom.walletAddBtn.addEventListener("click", openAddWalletDialog);
+  // Transfer dialog
+  const transferForm = dom.transferDialog?.querySelector("#transfer-form");
+  const transferCancelBtn = dom.transferDialog?.querySelector("#transfer-cancel");
+  if (transferForm) transferForm.addEventListener("submit", onSubmitTransfer);
+  if (transferCancelBtn) transferCancelBtn.addEventListener("click", closeTransferDialog);
+  // Add wallet dialog
+  const addWalletForm = dom.addWalletDialog?.querySelector("#add-wallet-form");
+  const addWalletCancelBtn = dom.addWalletDialog?.querySelector("#add-wallet-cancel");
+  if (addWalletForm) addWalletForm.addEventListener("submit", onSubmitAddWallet);
+  if (addWalletCancelBtn) addWalletCancelBtn.addEventListener("click", closeAddWalletDialog);
+  // Wallet balance management
+  if (dom.saveWalletBalancesBtn) dom.saveWalletBalancesBtn.addEventListener("click", onSaveWalletBalances);
+  if (dom.walletBalanceList) dom.walletBalanceList.addEventListener("blur", onWalletBalanceInputBlur, true);
 }
 
 function init() {
   if (!HAS_DOCUMENT) return;
   ensureRuntimeCaches();
   loadStateFromStorage();
+  initializeWalletBalances();
   generateRecurringRecords();
   refreshCategoryOptionsFromSettings();
+  refreshWalletMethodOptions();
   applySettingsToUI();
   setSettingsPanelOpen(false);
   setRecordsContentCollapsed(true, { renderOnExpand: false });
@@ -2259,6 +2699,7 @@ function init() {
   updateOnlineStatus();
   syncDailyReminderScheduleForAndroid();
   syncReminderTodayRecordState({ sendNow: true });
+  renderWallets();
   // Auto sync on app open if online and has endpoint
   if (state.runtime.isOnline && state.settings.sheetEndpoint) {
     onSyncPendingRecords();
